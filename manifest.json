@@ -16,6 +16,73 @@
     "standalone_route": "/ai-assistant",
     "busy_poll": "/api/ext/ai_assistant/tasks"
   },
+  "settings": [
+    {
+      "key": "auto_popup",
+      "label": "自动弹出欢迎窗",
+      "type": "switch",
+      "default": false,
+      "description": "登录后是否自动展开对话面板。",
+      "group": "行为"
+    },
+    {
+      "key": "model",
+      "label": "默认模型",
+      "type": "select",
+      "default": "default",
+      "options": [
+        { "value": "default", "label": "默认（由后端决定）" },
+        { "value": "hy3", "label": "Hy3" },
+        { "value": "claude", "label": "Claude" },
+        { "value": "gpt", "label": "GPT" }
+      ],
+      "description": "对话使用的底层模型。",
+      "group": "对话"
+    },
+    {
+      "key": "temperature",
+      "label": "随机性 (temperature)",
+      "type": "number",
+      "default": 0.7,
+      "min": 0,
+      "max": 1,
+      "step": 0.1,
+      "group": "对话"
+    },
+    {
+      "key": "theme",
+      "label": "面板主题",
+      "type": "radio",
+      "default": "auto",
+      "options": [
+        { "value": "auto", "label": "跟随系统" },
+        { "value": "light", "label": "浅色" },
+        { "value": "dark", "label": "深色" }
+      ],
+      "group": "外观"
+    },
+    {
+      "key": "quick_actions",
+      "label": "快捷操作",
+      "type": "checkbox",
+      "default": ["summarize", "translate"],
+      "options": [
+        { "value": "summarize", "label": "总结" },
+        { "value": "translate", "label": "翻译" },
+        { "value": "explain", "label": "解释" },
+        { "value": "code", "label": "生成代码" }
+      ],
+      "group": "外观"
+    },
+    {
+      "key": "welcome_text",
+      "label": "欢迎语",
+      "type": "text",
+      "default": "你好，我能帮你什么？",
+      "placeholder": "输入自定义欢迎语",
+      "group": "行为"
+    }
+  ],
   "backend": {
     "module": "backend.server",
     "factory": "create_blueprint",
