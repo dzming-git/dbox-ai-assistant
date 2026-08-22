@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 插件运行时数据（由宿主框架注入的 data_dir 生成）
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# 日志
+*.log
+
+# 编辑器 / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 虚拟环境
+venv/
+.venv/
+.env

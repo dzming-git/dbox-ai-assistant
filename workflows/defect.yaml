@@ -1,0 +1,54 @@
+id: defect
+name: 缺陷
+icon: "🐞"
+color: "#e5484d"
+description: 修复代码缺陷。先查 git 工作区、建单、定位根因并修复、最后复查 git。
+auto_infer: true
+infer_hint: |
+  用户反馈某功能坏了、报错、异常、崩溃、不符合预期、要修 bug、某个问题没修好、
+  出现了未定义行为，或明确说“这是缺陷/这是 bug”时，归为「缺陷」。
+
+steps:
+  - kind: shell
+    id: git_clean_before
+    when: start
+    # 工作区有改动则输出 1（不干净），否则 0
+    cmd: cmd /c "git status --porcelain | findstr /R /C:\".\" >nul && echo 1 || echo 0"
+    expect: "1"
+    on_expect_prompt: |
+      ⚠️ 当前 git 工作区不干净（存在未提交改动）。在动手修缺陷前先处理：
+      1. 判断这些改动是否属于本次缺陷修复任务；
+      2. 属于本任务的：确认有用且完整后提交，一次 git 只描述一个问题/优化，
+         提交消息不要提及反馈中心、不要提及问题单号，用文件方式写 UTF-8 消息避免中文乱码；
+      3. 属于杂项/无用的临时文件或截图：直接删除，不要提交；
+      4. 代码中禁止硬编码绝对路径，注释不要用真实环境数据举例。
+
+  - kind: ask
+    id: create_ticket
+    when: start
+    question: 是否为本次缺陷修复在反馈中心建单？
+    options: ["建单", "跳过"]
+    inject_on:
+      "建单": 处理完成后请通过反馈中心接口建单，留言描述问题根因（bug 就描述根因），
+              并把单标记为待验证，由管理员手动验证关闭。
+      "跳过": 本次不建单，直接修复。
+
+  - kind: llm
+    id: main_task
+    when: main
+    prompt: |
+      你是修复代码缺陷的工程师。请：
+      1. 先复现并定位根因，给出最小、精准的修改，避免无关改动；
+      2. 每完成一个独立功能立即提交 git（文件方式写 UTF-8 提交消息，禁提反馈中心/单号）；
+      3. 不泄露开发者信息：临时脚本/截图不提交，代码禁硬编码绝对路径；
+      4. 修复后说明根因与改动点，必要时给出验证方式。
+
+  - kind: shell
+    id: git_clean_after
+    when: end
+    cmd: cmd /c "git status --porcelain | findstr /R /C:\".\" >nul && echo 1 || echo 0"
+    expect: "1"
+    on_expect_prompt: |
+      🔍 缺陷修复已完成，但 git 工作区仍有未提交改动。请复查：
+      有用的改动按“一个独立功能一次提交”整理提交；无用的临时文件/截图删掉。
+      结束前保证仓库干净。

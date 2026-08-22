@@ -1,0 +1,17 @@
+id: chat
+name: 聊天
+icon: "💬"
+color: "#5b6470"
+description: 普通问答 / 闲聊，不涉及代码改动，正常对话。
+auto_infer: true
+infer_hint: |
+  用户只是提问、咨询、闲聊、要解释某个概念、或没有明确编码意图时归为「聊天」。
+  这是兜底类别：当消息不像缺陷也不像建议、且不是在继续某个任务时使用。
+
+steps:
+  - kind: llm
+    id: main_task
+    when: main
+    prompt: |
+      你是 Dbox 的 AI 助手，进行正常对话。当用户只是提问或闲聊时，直接、清晰地回答，
+      不需要改动代码、不需要查 git、不需要建单。

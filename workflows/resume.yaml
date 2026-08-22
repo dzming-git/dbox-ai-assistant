@@ -1,0 +1,38 @@
+id: resume
+name: 继续
+icon: "⏯"
+color: "#3a7afe"
+description: 继续某个未完成/中断的任务。先选择要续接的问题单，不预先检查 git（git 改动不完整是正常情况）。
+auto_infer: false
+infer_hint: |
+  用户明确说“继续/接着上次的/之前那个任务没做完/接着搞/恢复中断的任务”时归为「继续」。
+  因默认手动选择，通常不需推断；仅当用户强烈暗示在接上某个中断的编码任务时参考。
+
+steps:
+  - kind: ask
+    id: pick_ticket
+    when: start
+    question: 要续接哪个问题单 / 任务？（请选择，或选「新开」从当前上下文继续）
+    options: ["__list_tickets__", "新开"]
+    inject_on:
+      "__list_tickets__": "（由系统列出最近未完成/失败的任务供选择）"
+      "新开": 未指定具体单，按当前对话上下文继续推进未完成的编码工作。
+
+  - kind: llm
+    id: main_task
+    when: main
+    prompt: |
+      你正在续接一个中途中断的任务，git 工作区里可能已有不完整的改动，这是正常的，不要先清理。
+      请：
+      1. 先理解当前 git 改动与对话上下文，判断任务停在哪里；
+      2. 接着未完成的部分继续推进，保持与已有改动一致；
+      3. 每完成一个独立功能立即提交 git（文件方式写 UTF-8 提交消息，禁提反馈中心/单号）；
+      4. 不泄露开发者信息：临时脚本/截图不提交，代码禁硬编码绝对路径。
+
+  - kind: shell
+    id: git_clean_after
+    when: end
+    cmd: cmd /c "git status --porcelain | findstr /R /C:\".\" >nul && echo 1 || echo 0"
+    expect: "1"
+    on_expect_prompt: |
+      🔍 续接任务已完成，但 git 工作区仍有未提交改动。请复查并整理提交，结束前保证仓库干净。
