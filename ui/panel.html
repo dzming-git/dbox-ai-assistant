@@ -127,10 +127,10 @@ window.addEventListener('message', (e) => {
   }
 });
 // 请求 token（宿主监听 DBOX_REQUEST_TOKEN 后回发 DBOX_TOKEN）
-window.parent && window.parent.postMessage({ type: 'DBOX_REQUEST_TOKEN' }, '*');
+window.parent && window.parent.postMessage({ type: 'DBOX_REQUEST_TOKEN', extId: 'ai_assistant' }, '*');
 // 兜底：若 token 延迟未到，重试一次请求
 setTimeout(() => {
-  if (!token) window.parent.postMessage({ type: 'DBOX_REQUEST_TOKEN' }, '*');
+  if (!token) window.parent.postMessage({ type: 'DBOX_REQUEST_TOKEN', extId: 'ai_assistant' }, '*');
 }, 300);
 
 function api(p, o = {}) {
