@@ -43,20 +43,44 @@
     border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 13px;
   }
   .chat-header button:hover { color: var(--text); border-color: var(--accent-2); }
+  /* 会话切换条：下拉选会话 + 新建 + 删除，与标题栏分离避免窄屏拥挤 */
+  .conv-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  .conv-bar select {
+    flex: 1; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 13px;
+    min-width: 0;
+  }
+  .conv-bar button {
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 9px; cursor: pointer; font-size: 13px; flex: 0 0 auto;
+  }
+  .conv-bar button:hover { color: var(--text); border-color: var(--accent-2); }
+  .conv-bar button.danger:hover { color: var(--danger); border-color: var(--danger); }
   .messages {
     flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px;
   }
-  .msg { display: flex; gap: 10px; max-width: 100%; }
+  .msg { display: flex; gap: 10px; max-width: 100%; align-items: flex-start; }
   .msg .avatar {
     width: 30px; height: 30px; border-radius: 8px; flex: 0 0 auto;
     display: flex; align-items: center; justify-content: center; font-size: 14px;
   }
   .msg.user .avatar { background: var(--accent); color: #fff; }
   .msg.assistant .avatar { background: var(--accent-2); color: var(--text); }
+  /* 聊天软件风格：用户消息头像在右侧、气泡靠右；AI 在左侧 */
+  .msg.user { flex-direction: row-reverse; }
+  .msg.user .bubble { margin-left: auto; }
   .bubble {
     padding: 10px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word;
     background: var(--ai-bubble); border: 1px solid var(--border); overflow-x: auto;
+    max-width: min(78%, 640px);
   }
+  .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .msg.user .meta { text-align: right; }
+  .msg.user .bubble-wrap { display: flex; flex-direction: column; align-items: flex-end; }
+  .msg.assistant .bubble-wrap { display: flex; flex-direction: column; align-items: flex-start; }
   .msg.user .bubble { background: var(--user-bubble); border-color: transparent; }
   .msg.assistant .bubble { background: var(--ai-bubble); }
   .bubble .thinking {
@@ -69,6 +93,18 @@
   }
   .bubble code { background: #0c0c12; padding: 1px 4px; border-radius: 4px; font-size: 12.5px; }
   .bubble pre code { background: none; padding: 0; }
+  /* 长回答默认收起：超过 3 行折叠，仅显示约 3 行；点“展开全文”展开，收起后按钮锚定回原位置 */
+  .collapsible.collapsed { overflow: hidden; position: relative; }
+  .collapsible.collapsed::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 28px;
+    background: linear-gradient(to bottom, rgba(31,31,42,0), var(--ai-bubble));
+    pointer-events: none;
+  }
+  .expand-btn {
+    display: block; width: 100%; text-align: center; color: var(--accent);
+    font-size: 12.5px; cursor: pointer; user-select: none; padding: 6px 0 2px;
+  }
+  .expand-btn:hover { text-decoration: underline; }
   .empty { color: var(--muted); text-align: center; margin: auto; }
   .composer {
     border-top: 1px solid var(--border); background: var(--panel);
@@ -86,7 +122,25 @@
   }
   .composer button:disabled { opacity: .5; cursor: default; }
   .composer .cancel { background: transparent; color: var(--danger); border: 1px solid var(--border); }
+  /* 处理中占位：明确告知用户 AI 正在工作，避免空气泡被误认为“服务挂了” */
+  .pending { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; min-height: 18px; }
+  .pending .spinner {
+    width: 14px; height: 14px; flex: 0 0 auto;
+    border: 2px solid var(--accent-2); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .status-line { color: var(--muted); font-size: 12px; padding: 2px 14px 0; min-height: 16px; }
+  /* 删除确认弹窗：内嵌面板实现，不依赖宿主原生 dialog（内嵌 webview 常禁用 confirm/alert） */
+  .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; align-items: center; justify-content: center; z-index: 50; }
+  .modal-mask.show { display: flex; }
+  .modal { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 18px; max-width: 320px; width: calc(100% - 40px); box-shadow: 0 10px 30px rgba(0,0,0,.4); }
+  .modal .modal-msg { margin: 0 0 16px; line-height: 1.6; }
+  .modal .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .modal button { background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+  .modal button:hover { color: var(--text); border-color: var(--accent-2); }
+  .modal button.danger { color: var(--danger); border-color: var(--danger); }
+  .modal button.danger:hover { background: rgba(255,107,107,.12); color: var(--danger); }
 </style>
 </head>
 <body>
@@ -94,7 +148,14 @@
     <span class="title">AI 助手</span>
     <span class="spacer"></span>
     <select id="model"></select>
-    <button id="clearBtn" title="清空对话">清空</button>
+    <button id="clearBtn" title="清空当前会话">清空</button>
+  </div>
+  <div class="conv-bar">
+    <select id="convList" title="切换会话">
+      <option value="">（无会话）</option>
+    </select>
+    <button id="newConvBtn" title="新建对话">＋</button>
+    <button id="delConvBtn" class="danger" title="删除当前会话">🗑</button>
   </div>
   <div class="messages" id="messages">
     <div class="empty" id="empty">直接输入消息开始对话。可让它读写文件、运行命令。</div>
@@ -106,19 +167,39 @@
     <button id="cancelBtn" class="cancel" style="display:none">停止</button>
   </div>
 
+<div class="modal-mask" id="confirmMask">
+  <div class="modal">
+    <p class="modal-msg" id="confirmMsg"></p>
+    <div class="modal-actions">
+      <button id="confirmCancel" type="button">取消</button>
+      <button id="confirmOk" class="danger" type="button">删除</button>
+    </div>
+  </div>
+</div>
+
 <script>
 let token = null;
 let currentTask = null;     // 进行中的 task_id
+let currentConvId = null;    // 当前会话 id（持久化到 localStorage）
 let thinkingBuf = '';       // 当前助手消息的思考累积
 let bodyBuf = '';           // 当前助手消息正文累积
+
+// 框架注入的真实地址占位符（routes.py 在返回面板时替换为运行期真实值）：
+//   __EXT_KEY__        -> 拓展 key（=文件夹名），用于 token 握手 extId
+//   __EXT_API_PREFIX__ -> 后端 API 前缀（/api/ext/<key>/，含结尾斜杠）
+// 由此面板不再写死插件 id，可复用于任意拓展。
+const EXT_KEY = '__EXT_KEY__';
+const API_PREFIX = '__EXT_API_PREFIX__';
+const CONV_KEY = 'ai_assistant_conv_' + EXT_KEY;
 
 // 宿主（ExtensionHost / ExtensionStandalone）通过 postMessage 下发 token
 let booted = false;
 function boot() {
   if (!token) return;          // 无 token 不加载，避免 401 导致空（关键：兜底定时器可能在 token 到达前抢跑）
+  if (booted) return;          // 幂等：token 事件/兜底定时器/末尾 IIFE 可能多次触发，只初始化一次，避免历史被重复加载成多份
   booted = true;
   loadModels();
-  loadHistory();
+  loadConversations();
 }
 window.addEventListener('message', (e) => {
   if (e.data && e.data.type === 'DBOX_TOKEN' && e.data.token) {
@@ -127,10 +208,10 @@ window.addEventListener('message', (e) => {
   }
 });
 // 请求 token（宿主监听 DBOX_REQUEST_TOKEN 后回发 DBOX_TOKEN）
-window.parent && window.parent.postMessage({ type: 'DBOX_REQUEST_TOKEN', extId: 'ai_assistant' }, '*');
+window.parent && window.parent.postMessage({ type: 'DBOX_REQUEST_TOKEN', extId: EXT_KEY }, '*');
 // 兜底：若 token 延迟未到，重试一次请求；若已到则直接 boot（不会因 booted 标志被拦截）
 setTimeout(() => {
-  if (!token) window.parent.postMessage({ type: 'DBOX_REQUEST_TOKEN', extId: 'ai_assistant' }, '*');
+  if (!token) window.parent.postMessage({ type: 'DBOX_REQUEST_TOKEN', extId: EXT_KEY }, '*');
   else boot();
 }, 600);
 
@@ -155,8 +236,36 @@ function setStatus(msg, isErr) {
   el.textContent = msg || '';
   el.style.color = isErr ? 'var(--danger)' : '';
 }
+// 内嵌确认弹窗：返回 Promise<boolean>。用面板内 DOM 实现，避免依赖宿主原生 confirm
+// （内嵌 webview 常禁用原生 dialog，导致点击删除“无响应”）。
+function showConfirm(msg) {
+  return new Promise((resolve) => {
+    const mask = document.getElementById('confirmMask');
+    const msgEl = document.getElementById('confirmMsg');
+    const okBtn = document.getElementById('confirmOk');
+    const cancelBtn = document.getElementById('confirmCancel');
+    if (!mask || !msgEl || !okBtn || !cancelBtn) { resolve(true); return; }
+    msgEl.textContent = msg;
+    let settled = false;
+    function cleanup() {
+      if (settled) return; settled = true;
+      mask.classList.remove('show');
+      okBtn.onclick = null; cancelBtn.onclick = null; mask.onclick = null;
+    }
+    okBtn.onclick = () => { cleanup(); resolve(true); };
+    cancelBtn.onclick = () => { cleanup(); resolve(false); };
+    mask.onclick = (e) => { if (e.target === mask) { cleanup(); resolve(false); } };
+    mask.classList.add('show');
+  });
+}
 function esc(s) {
   return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const p = n => (n < 10 ? '0' + n : '' + n);
+  return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 // 极简 markdown：```代码块``` 与 `行内代码`
 function renderMarkdown(text) {
@@ -166,12 +275,19 @@ function renderMarkdown(text) {
   return html;
 }
 
-function addMsg(role) {
+function addMsg(role, text, ts) {
   const empty = document.getElementById('empty'); if (empty) empty.remove();
   const wrap = document.createElement('div'); wrap.className = 'msg ' + role;
   const av = document.createElement('div'); av.className = 'avatar'; av.textContent = role === 'user' ? '你' : 'AI';
+  const bubbleWrap = document.createElement('div'); bubbleWrap.className = 'bubble-wrap';
   const bubble = document.createElement('div'); bubble.className = 'bubble';
-  wrap.appendChild(av); wrap.appendChild(bubble);
+  bubbleWrap.appendChild(bubble);
+  if (ts) {
+    const meta = document.createElement('div'); meta.className = 'meta';
+    meta.textContent = fmtTime(ts);
+    bubbleWrap.appendChild(meta);
+  }
+  wrap.appendChild(av); wrap.appendChild(bubbleWrap);
   document.getElementById('messages').appendChild(wrap);
   scrollBottom();
   return { wrap, bubble };
@@ -180,54 +296,230 @@ function scrollBottom() {
   const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight;
 }
 
+// 长回答折叠：超过 3 行时默认收起，仅显示 3 行，点击“展开全文”再展开
+const COLLAPSE_LINES = 3; // 内容超过该行文时折叠
+function lineHeightOf(el) {
+  const lh = parseFloat(getComputedStyle(el).lineHeight);
+  return isNaN(lh) ? 22 : lh;
+}
+function applyCollapse(bubble) {
+  let bodyEl = bubble.querySelector('.body');
+  // 兼容：气泡内容直接写在 bubble 内（无 .body 子元素，例如历史对话直接 innerHTML）时，
+  // 把现有子节点（含文本节点）统一包进 .body。必须用 childNodes（含文本节点），
+  // 不能用 children（仅元素节点）——纯长文本是文本节点，children.length 为 0 会导致漏折叠。
+  if (!bodyEl && bubble.childNodes.length) {
+    bodyEl = document.createElement('div');
+    bodyEl.className = 'body';
+    while (bubble.firstChild) bodyEl.appendChild(bubble.firstChild);
+    bubble.appendChild(bodyEl);
+  }
+  if (!bodyEl || bodyEl.dataset.collapseReady) return;
+  const lh = lineHeightOf(bodyEl);
+  if (bodyEl.scrollHeight <= lh * COLLAPSE_LINES) return;
+  bodyEl.classList.add('collapsible', 'collapsed');
+  bodyEl.style.maxHeight = (lh * COLLAPSE_LINES) + 'px';
+  bodyEl.dataset.collapseReady = '1';
+  const btn = document.createElement('span');
+  btn.className = 'expand-btn';
+  btn.textContent = '展开全文 ▾';
+  btn.onclick = () => toggleCollapse(bodyEl, btn, bubble);
+  // 放到气泡内（与折叠内容平级，不被 overflow 裁剪）；展开/收起时按钮始终在文本下方
+  bubble.appendChild(btn);
+}
+// 展开/收起时，用按钮前后屏幕位置差修正滚动，把按钮钉在原视觉位置，避免阅读位置跳动
+function toggleCollapse(bodyEl, btn, bubble) {
+  const m = document.getElementById('messages');
+  const before = btn.getBoundingClientRect().top;
+  if (bodyEl.classList.contains('collapsed')) {
+    bodyEl.style.maxHeight = 'none';
+    bodyEl.classList.remove('collapsed');
+    btn.textContent = '收起 ▴';
+  } else {
+    bodyEl.style.maxHeight = (lineHeightOf(bodyEl) * COLLAPSE_LINES) + 'px';
+    bodyEl.classList.add('collapsed');
+    btn.textContent = '展开全文 ▾';
+  }
+  const after = btn.getBoundingClientRect().top;
+  m.scrollTop += (after - before);
+}
+
+// ---------- 会话管理 ----------
+function saveCurrentConv() {
+  try { localStorage.setItem(CONV_KEY, currentConvId || ''); } catch (_) {}
+}
+function loadCurrentConv() {
+  try { return localStorage.getItem(CONV_KEY) || ''; } catch (_) { return ''; }
+}
+async function loadConversations() {
+  try {
+    const r = await api(API_PREFIX + 'conversations'); const j = await r.json();
+    const list = j.conversations || [];
+    const sel = document.getElementById('convList');
+    const prev = currentConvId;
+    sel.innerHTML = '';
+    if (!list.length) {
+      const o = document.createElement('option'); o.value = ''; o.textContent = '（无会话）';
+      sel.appendChild(o);
+      currentConvId = null; saveCurrentConv();
+      renderMessages([]);
+      return;
+    }
+    list.forEach(c => {
+      const o = document.createElement('option'); o.value = c.id;
+      const title = (c.title || '新对话').replace(/</g, '&lt;');
+      const prev = c.preview ? ' — ' + c.preview.replace(/</g, '&lt;') : '';
+      o.textContent = title + prev;
+      sel.appendChild(o);
+    });
+    // 恢复上次会话 id；不存在则取最近（第一项）
+    let target = (prev && list.some(c => c.id === prev)) ? prev : list[0].id;
+    sel.value = target;
+    if (target !== currentConvId) {
+      currentConvId = target; saveCurrentConv();
+    }
+    await loadMessages(target);
+  } catch (e) {
+    setStatus('加载会话失败：' + (e.message || e), true);
+  }
+}
+async function selectConversation(cid) {
+  if (cid === currentConvId) return;
+  currentConvId = cid || null; saveCurrentConv();
+  await loadMessages(cid);
+}
+async function loadMessages(cid) {
+  if (!cid) { renderMessages([]); return; }
+  try {
+    const r = await api(API_PREFIX + 'conversations/' + encodeURIComponent(cid) + '/messages');
+    const j = await r.json();
+    renderMessages(j.messages || []);
+    scrollBottom();
+  } catch (e) {
+    setStatus('加载消息失败：' + (e.message || e), true);
+  }
+}
+function renderMessages(msgs) {
+  const box = document.getElementById('messages');
+  box.innerHTML = '<div class="empty" id="empty">直接输入消息开始对话。可让它读写文件、运行命令。</div>';
+  (msgs || []).forEach(turn => {
+    const { bubble } = addMsg(turn.role, turn.text, turn.created_at);
+    if (turn.role === 'assistant') {
+      // 历史助手消息也用 .body 包裹，与流式路径一致，确保 applyCollapse 能找到容器并折叠
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'body';
+      bodyEl.innerHTML = renderMarkdown(turn.text);
+      bubble.appendChild(bodyEl);
+      applyCollapse(bubble);
+    } else {
+      bubble.innerHTML = renderMarkdown(turn.text);
+    }
+  });
+}
+async function newConversation() {
+  try {
+    const r = await api(API_PREFIX + 'conversations', { method: 'POST', body: JSON.stringify({}) });
+    const j = await r.json();
+    if (!j.success) { setStatus('新建会话失败：' + (j.message || ''), true); return; }
+    await loadConversations();
+    currentConvId = j.conversation_id; saveCurrentConv();
+    const sel = document.getElementById('convList'); sel.value = j.conversation_id;
+    renderMessages([]);
+  } catch (e) {
+    setStatus('新建会话失败：' + (e.message || e), true);
+  }
+}
+async function deleteConversation() {
+  if (!currentConvId) { setStatus('没有可删除的会话', true); return; }
+  if (!(await showConfirm('删除当前会话及其全部消息？'))) return;
+  try {
+    const r = await api(API_PREFIX + 'conversations/' + encodeURIComponent(currentConvId), { method: 'DELETE' });
+    const j = await r.json();
+    if (!j.success) { setStatus('删除失败：' + (j.message || ''), true); return; }
+    currentConvId = null; saveCurrentConv();
+    await loadConversations();
+  } catch (e) {
+    setStatus('删除失败：' + (e.message || e), true);
+  }
+}
+
 // ---------- 发送 ----------
 async function send() {
   const ta = document.getElementById('input');
   const text = ta.value.trim();
   if (!text || currentTask) return;
   ta.value = ''; ta.style.height = 'auto';
-  const { bubble } = addMsg('user'); bubble.innerHTML = renderMarkdown(text);
+  const { bubble } = addMsg('user', text); bubble.innerHTML = renderMarkdown(text);
 
   const { bubble: ab } = addMsg('assistant');
   thinkingBuf = ''; bodyBuf = '';
+  let pendingCleared = false;
   const thinkingEl = document.createElement('div'); thinkingEl.className = 'thinking';
   const bodyEl = document.createElement('div'); bodyEl.className = 'body';
-  ab.appendChild(thinkingEl); ab.appendChild(bodyEl);
+  const pendingEl = document.createElement('div'); pendingEl.className = 'pending';
+  pendingEl.innerHTML = '<span class="spinner"></span> AI 正在思考…';
+  ab.appendChild(thinkingEl); ab.appendChild(bodyEl); ab.appendChild(pendingEl);
+  // 首个真实内容（思考/回复 token）到达即移除“思考中”占位，避免空气泡
+  function clearPending() {
+    if (pendingCleared) return; pendingCleared = true;
+    const p = ab.querySelector('.pending'); if (p) p.remove();
+  }
 
   try {
-    const r = await api('/api/ext/ai_assistant/chat', { method: 'POST',
-      body: JSON.stringify({ message: text, model: document.getElementById('model').value }) });
+    const r = await api(API_PREFIX + 'chat', { method: 'POST',
+      body: JSON.stringify({ message: text, model: document.getElementById('model').value,
+        conversation_id: currentConvId || '' }) });
     const j = await r.json();
     if (!j.success) { bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(j.message || '') + '</span>'; setStatus('发送失败：' + (j.message || ''), true); return; }
     currentTask = j.task_id;
+    // 若服务端新建/命中了某个会话（首条消息自动建会话），同步到当前会话并持久化
+    if (j.conversation_id && j.conversation_id !== currentConvId) {
+      currentConvId = j.conversation_id; saveCurrentConv();
+      const sel = document.getElementById('convList'); if (sel) sel.value = currentConvId;
+    }
     setRunning(true);
   } catch (e) {
     bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(e.message || '') + '</span>';
     setStatus('发送请求失败：' + (e.message || e) + '（请确认已登录且扩展宿主 8093 运行中）', true);
     return;
   }
-  currentTask = j.task_id;
-  setRunning(true);
 
   // SSE
-  const es = new EventSource('/api/ext/ai_assistant/stream?task_id=' + encodeURIComponent(currentTask));
+  const es = new EventSource(API_PREFIX + 'stream?task_id=' + encodeURIComponent(currentTask));
   es.addEventListener('token', (e) => {
+    clearPending();
     bodyBuf += e.data; bodyEl.innerHTML = renderMarkdown(bodyBuf); scrollBottom();
   });
   es.addEventListener('thinking', (e) => {
+    clearPending();
     thinkingBuf += e.data; thinkingEl.textContent = thinkingBuf; scrollBottom();
   });
   es.addEventListener('assistant', (e) => {
+    clearPending();
     bodyBuf = e.data; bodyEl.innerHTML = renderMarkdown(bodyBuf); scrollBottom();
   });
   es.addEventListener('error', (e) => {
+    clearPending();
     bodyEl.innerHTML += '<div style="color:var(--danger)">错误：' + esc(e.data) + '</div>';
   });
+  // SSE 连接层中断（非业务 error 事件）：给出明确提示，避免占位永久旋转
+  es.onerror = () => {
+    clearPending();
+    bodyEl.innerHTML += '<div style="color:var(--danger)">连接中断，请重试</div>';
+    setRunning(false); currentTask = null;
+  };
   es.addEventListener('done', (e) => {
     es.close();
     thinkingEl.remove();
+    // 整段无任何内容（thinking/body 皆空）时兜底，绝不留下空白气泡
+    if (!pendingCleared) {
+      bodyEl.innerHTML = '<span style="color:var(--muted)">（没有收到回复）</span>';
+      const p = ab.querySelector('.pending'); if (p) p.remove();
+    }
+    applyCollapse(ab); // 长回答完成后再判定是否折叠
     currentTask = null; setRunning(false);
     document.getElementById('status').textContent = '';
+    // 会话标题/preview 可能已更新，刷新会话列表（不重渲染当前消息）
+    loadConversations();
   });
 }
 function setRunning(run) {
@@ -237,13 +529,13 @@ function setRunning(run) {
 }
 async function cancel() {
   if (!currentTask) return;
-  await api('/api/ext/ai_assistant/cancel', { method: 'POST', body: JSON.stringify({ task_id: currentTask }) });
+  await api(API_PREFIX + 'cancel', { method: 'POST', body: JSON.stringify({ task_id: currentTask }) });
 }
 
 // ---------- 历史 / 模型 ----------
 async function loadModels() {
   try {
-    const r = await api('/api/ext/ai_assistant/models'); const j = await r.json();
+    const r = await api(API_PREFIX + 'models'); const j = await r.json();
     const sel = document.getElementById('model');
     (j.models || []).forEach(m => {
       const o = document.createElement('option'); o.value = m.id; o.textContent = m.name; sel.appendChild(o);
@@ -254,25 +546,17 @@ async function loadModels() {
     setStatus('加载模型失败：' + (e.message || e) + '（请确认已登录且扩展宿主 8093 运行中）', true);
   }
 }
-async function loadHistory() {
-  try {
-    const r = await api('/api/ext/ai_assistant/history?limit=50'); const j = await r.json();
-    (j.history || []).forEach(turn => {
-      const { bubble } = addMsg(turn.role);
-      bubble.innerHTML = renderMarkdown(turn.text);
-    });
-  } catch (e) {
-    setStatus('加载历史失败：' + (e.message || e), true);
-  }
-}
 
 // ---------- 绑定 ----------
 document.getElementById('sendBtn').onclick = send;
 document.getElementById('cancelBtn').onclick = cancel;
 document.getElementById('clearBtn').onclick = async () => {
-  await api('/api/ext/ai_assistant/clear', { method: 'POST' });
-  document.getElementById('messages').innerHTML = '<div class="empty" id="empty">直接输入消息开始对话。可让它读写文件、运行命令。</div>';
+  await api(API_PREFIX + 'clear', { method: 'POST', body: JSON.stringify({ conversation_id: currentConvId || '' }) });
+  renderMessages([]);
 };
+document.getElementById('newConvBtn').onclick = newConversation;
+document.getElementById('delConvBtn').onclick = deleteConversation;
+document.getElementById('convList').onchange = (e) => selectConversation(e.target.value);
 const ta = document.getElementById('input');
 ta.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }

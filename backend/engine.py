@@ -3,14 +3,13 @@
 设计原则：回到最原始的聊天体验——就像在 IDE 里和助手对话一样。
 - 纯多轮文本对话，流式输出（SSE）。
 - 底层经 CodeBuddy CLI（-p 非交互 + stream-json）调用，保留其文件读写/命令执行能力。
-- 会话历史由服务端按 owner 维护（内存），每次请求把最近若干轮拼成纯文本发给 CLI。
-- 不引入意图分类、阶段气泡、计划模式、反馈单建单、回滚、上下文续写等任何包裹逻辑，
-  从根本上消除"上下文污染"与"处处受限"。
+- 会话历史由服务端按 owner 维护，并落库到 sqlite（data/plugins/<key>/db/chat.db），
+  重启/重载 extensions_host 后从历史库恢复，支持多会话、消息级 id 与 created_at。
+- 不引入意图分类、阶段气泡、计划模式、反馈单建单、回滚、上下文续写等任何包裹逻辑。
 
 运行于独立的拓展宿主进程（extensions_host），凭证经 host.vault 读取。
 """
 import os
-import sys
 import re
 import json
 import time
@@ -33,6 +32,12 @@ _MAX_TASK_SECONDS = 600
 
 # 每轮对话回传给 CLI 的最大历史条数（用户+助手各算一条）。
 _MAX_HISTORY = 20
+
+# 会话标题自动取首条用户消息的前 N 个字符。
+_TITLE_PREVIEW = 24
+
+# 会话列表 preview 取最近一条消息的前 N 个字符。
+_MSG_PREVIEW = 48
 
 # 极简系统提示：直接动手、中文说明，仅此而已。
 _SYSTEM_PROMPT = (
@@ -169,22 +174,157 @@ class AIChatManager:
         self._worker = None
         self._procs = {}                      # task_id -> Popen（取消用）
         self._cancel = {}                     # task_id -> True
-        self._convs = {}                      # owner_id -> [ {role,text}, ... ]（纯多轮历史）
         self._subscribers = {}                # task_id -> [queue.Queue, ...]（SSE 订阅者）
         self._buffers = {}                    # task_id -> [event_str, ...]（供重连续接）
-        self._tasks = {}                      # task_id -> {owner_id, status, created_at}
+        self._tasks = {}                      # task_id -> {owner_id, conversation_id, status, created_at}
         self._vault = None
+        self._host = None
+        self._db = None                       # sqlite 连接（历史落库，重启可恢复）
+        self._db_path = None
         self._initialized = False
+        # 会话级内存缓存（落库后的镜像，重启从 DB 重建）
+        self._conv_meta = {}                  # cid -> {owner_id, title, created_at, updated_at}
+        self._conv_msgs = {}                  # cid -> [ {id, role, text, created_at, task_id}, ... ]
 
     # ---------- 初始化 ----------
-    def init(self, data_dir, vault=None, tasks=None):
-        self._vault = vault
+    def init(self, host, vault=None, tasks=None):
+        self._host = host
+        self._vault = vault or (getattr(host, 'vault', None) if host else None)
+        # 历史落库：每个拓展在 data/plugins/<key>/db/chat.db 持有一份对话记录，
+        # 重启/重载 extensions_host 后从历史库恢复，解决「刷新/重启即丢失」问题。
+        if host is not None:
+            try:
+                self._db_path = host.db('chat')
+            except Exception as e:
+                _logger.error('AI 助手历史库路径获取失败: %s', e)
         with self._lock:
             if self._initialized:
                 return
             self._initialized = True
+        self._init_db()
+        self._load_from_db()
         self._start_worker()
-        _logger.info('AI 助手引擎已初始化（归零版：纯多轮对话）')
+        _logger.info('AI 助手引擎已初始化（归零版：纯多轮对话，会话级历史落库）')
+
+    # ---------- 历史落库（sqlite）----------
+    def _init_db(self):
+        if not self._db_path:
+            return
+        try:
+            import sqlite3
+            self._db = sqlite3.connect(self._db_path, check_same_thread=False)
+            self._db.execute(
+                'CREATE TABLE IF NOT EXISTS conversations ('
+                'id TEXT PRIMARY KEY, owner_id TEXT, title TEXT,'
+                'created_at REAL, updated_at REAL)')
+            self._db.execute(
+                'CREATE TABLE IF NOT EXISTS messages ('
+                'id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT,'
+                'owner_id TEXT, role TEXT, text TEXT, created_at REAL,'
+                'task_id TEXT)')
+            self._db.commit()
+        except Exception as e:
+            _logger.error('AI 助手历史库初始化失败: %s', e)
+            self._db = None
+
+    def _load_from_db(self):
+        if not getattr(self, '_db', None):
+            return
+        try:
+            conv_rows = self._db.execute(
+                'SELECT id, owner_id, title, created_at, updated_at '
+                'FROM conversations').fetchall()
+            msg_rows = self._db.execute(
+                'SELECT id, conversation_id, owner_id, role, text, created_at, task_id '
+                'FROM messages ORDER BY id').fetchall()
+            with self._lock:
+                for cid, owner_id, title, created_at, updated_at in conv_rows:
+                    self._conv_meta[cid] = {
+                        'owner_id': owner_id, 'title': title,
+                        'created_at': created_at, 'updated_at': updated_at}
+                    self._conv_msgs.setdefault(cid, [])
+                for mid, cid, owner_id, role, text, created_at, task_id in msg_rows:
+                    if cid not in self._conv_meta:
+                        # 孤儿消息：会话元数据缺失时补一个占位会话，保证消息不丢
+                        self._conv_meta[cid] = {
+                            'owner_id': owner_id, 'title': (text or '')[:_TITLE_PREVIEW],
+                            'created_at': created_at or time.time(),
+                            'updated_at': created_at or time.time()}
+                        self._conv_msgs.setdefault(cid, [])
+                    self._conv_msgs[cid].append({
+                        'id': mid, 'role': role, 'text': text,
+                        'created_at': created_at, 'task_id': task_id})
+        except Exception as e:
+            _logger.error('AI 助手历史载入失败: %s', e)
+
+    def _insert_conv(self, cid, owner_id, title, created_at, updated_at):
+        db = getattr(self, '_db', None)
+        if not db:
+            return
+        try:
+            with self._lock:
+                db.execute(
+                    'INSERT OR REPLACE INTO conversations'
+                    '(id, owner_id, title, created_at, updated_at) '
+                    'VALUES (?,?,?,?,?)',
+                    (cid, owner_id, title, created_at, updated_at))
+                db.commit()
+        except Exception as e:
+            _logger.error('AI 助手会话写入失败: %s', e)
+
+    def _append_db(self, cid, owner_id, role, text, created_at, task_id):
+        db = getattr(self, '_db', None)
+        if not db:
+            return
+        try:
+            with self._lock:
+                cur = db.execute(
+                    'INSERT INTO messages'
+                    '(conversation_id, owner_id, role, text, created_at, task_id) '
+                    'VALUES (?,?,?,?,?,?)',
+                    (cid, owner_id, role, text, created_at, task_id))
+                db.commit()
+                mid = cur.lastrowid
+            return mid
+        except Exception as e:
+            _logger.error('AI 助手历史写入失败: %s', e)
+            return None
+
+    def _update_conv_time(self, cid, updated_at):
+        db = getattr(self, '_db', None)
+        if not db:
+            return
+        try:
+            with self._lock:
+                db.execute(
+                    'UPDATE conversations SET updated_at=? WHERE id=?',
+                    (updated_at, cid))
+                db.commit()
+        except Exception as e:
+            _logger.error('AI 助手会话时间更新失败: %s', e)
+
+    def _db_delete_conv(self, cid):
+        db = getattr(self, '_db', None)
+        if not db:
+            return
+        try:
+            with self._lock:
+                db.execute('DELETE FROM messages WHERE conversation_id=?', (cid,))
+                db.execute('DELETE FROM conversations WHERE id=?', (cid,))
+                db.commit()
+        except Exception as e:
+            _logger.error('AI 助手会话删除失败: %s', e)
+
+    def _db_clear_conv(self, cid):
+        db = getattr(self, '_db', None)
+        if not db:
+            return
+        try:
+            with self._lock:
+                db.execute('DELETE FROM messages WHERE conversation_id=?', (cid,))
+                db.commit()
+        except Exception as e:
+            _logger.error('AI 助手会话清空失败: %s', e)
 
     def _start_worker(self):
         if self._worker and self._worker.is_alive():
@@ -192,36 +332,155 @@ class AIChatManager:
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
 
-    # ---------- 历史 ----------
-    def _history(self, owner_id):
-        return self._convs.setdefault(owner_id, [])
+    # ---------- 会话管理（内存 + 落库）----------
+    def _owner_convs(self, owner_id):
+        """返回该用户会话 id 列表（按 updated_at 倒序）。"""
+        cids = [c for c, m in self._conv_meta.items() if m.get('owner_id') == owner_id]
+        cids.sort(key=lambda c: self._conv_meta[c].get('updated_at', 0), reverse=True)
+        return cids
 
-    def history(self, owner_id, limit=50):
-        h = self._history(owner_id)
-        return h[-limit:]
+    def _ensure_default_conv(self, owner_id):
+        """确保用户至少有一个会话（首条消息前自动建好）。返回 cid。"""
+        with self._lock:
+            cids = self._owner_convs(owner_id)
+            if cids:
+                return cids[0]
+            cid = uuid.uuid4().hex
+            now = time.time()
+            self._conv_meta[cid] = {
+                'owner_id': owner_id, 'title': '新对话',
+                'created_at': now, 'updated_at': now}
+            self._conv_msgs[cid] = []
+            self._insert_conv(cid, owner_id, '新对话', now, now)
+            return cid
 
-    def clear(self, owner_id=None):
-        if owner_id is None:
-            self._convs.clear()
-        else:
-            self._convs.pop(owner_id, None)
+    def list_conversations(self, owner_id):
+        with self._lock:
+            out = []
+            for cid in self._owner_convs(owner_id):
+                meta = self._conv_meta[cid]
+                msgs = self._conv_msgs.get(cid, [])
+                preview = ''
+                if msgs:
+                    preview = msgs[-1].get('text') or ''
+                    preview = preview.replace('\n', ' ').strip()[:_MSG_PREVIEW]
+                out.append({
+                    'id': cid,
+                    'title': meta.get('title') or '新对话',
+                    'created_at': meta.get('created_at'),
+                    'updated_at': meta.get('updated_at'),
+                    'preview': preview,
+                    'msg_count': len(msgs),
+                })
+        return out
+
+    def create_conversation(self, owner_id, title=None):
+        with self._lock:
+            cid = uuid.uuid4().hex
+            now = time.time()
+            title = (title or '').strip() or '新对话'
+            self._conv_meta[cid] = {
+                'owner_id': owner_id, 'title': title,
+                'created_at': now, 'updated_at': now}
+            self._conv_msgs[cid] = []
+            self._insert_conv(cid, owner_id, title, now, now)
+            return cid
+
+    def delete_conversation(self, owner_id, cid):
+        with self._lock:
+            meta = self._conv_meta.get(cid)
+            if not meta or meta.get('owner_id') != owner_id:
+                return False
+            self._conv_meta.pop(cid, None)
+            self._conv_msgs.pop(cid, None)
+            self._db_delete_conv(cid)
+            return True
+
+    def clear_conversation(self, owner_id, cid):
+        with self._lock:
+            meta = self._conv_meta.get(cid)
+            if not meta or meta.get('owner_id') != owner_id:
+                return False
+            self._conv_msgs[cid] = []
+            self._db_clear_conv(cid)
+            return True
+
+    def rename_conversation(self, owner_id, cid, title):
+        with self._lock:
+            meta = self._conv_meta.get(cid)
+            if not meta or meta.get('owner_id') != owner_id:
+                return False
+            title = (title or '').strip() or '新对话'
+            meta['title'] = title
+            meta['updated_at'] = time.time()
+            self._insert_conv(cid, owner_id, title, meta['created_at'], meta['updated_at'])
+            return True
+
+    # ---------- 历史（按会话）----------
+    def history(self, owner_id, conversation_id=None, limit=50):
+        with self._lock:
+            if conversation_id:
+                msgs = list(self._conv_msgs.get(conversation_id, []))
+            else:
+                cids = self._owner_convs(owner_id)
+                cid = cids[0] if cids else None
+                msgs = list(self._conv_msgs.get(cid, [])) if cid else []
+        return msgs[-limit:]
+
+    def clear(self, owner_id=None, conversation_id=None):
+        with self._lock:
+            if conversation_id:
+                return self.clear_conversation(owner_id, conversation_id)
+            if owner_id is None:
+                # 全清（仅清空当前用户的全部会话），逐个删，保持 DB 一致
+                for cid in list(self._owner_convs(owner_id)):
+                    self._conv_meta.pop(cid, None)
+                    self._conv_msgs.pop(cid, None)
+                    self._db_delete_conv(cid)
+                return True
+            for cid in list(self._owner_convs(owner_id)):
+                self._conv_meta.pop(cid, None)
+                self._conv_msgs.pop(cid, None)
+                self._db_delete_conv(cid)
+            return True
 
     # ---------- 入队 ----------
-    def chat(self, message, owner_id=None, model=None):
-        """入队一条用户消息，返回 task_id。会在历史里追加该用户消息。"""
+    def chat(self, message, owner_id=None, model=None, conversation_id=None):
+        """入队一条用户消息，返回 (task_id, err)。会在指定/默认会话里追加该用户消息。"""
         message = (message or '').strip()
         if not message:
             return None, '消息为空'
-        task_id = uuid.uuid4().hex
         with self._lock:
+            # 解析目标会话：显式指定则校验归属；否则取最近会话，无则建默认
+            if conversation_id:
+                meta = self._conv_meta.get(conversation_id)
+                if not meta or meta.get('owner_id') != owner_id:
+                    return None, '会话不存在'
+                cid = conversation_id
+            else:
+                cid = self._ensure_default_conv(owner_id)
+            task_id = uuid.uuid4().hex
+            now = time.time()
             self._tasks[task_id] = {
-                'owner_id': owner_id, 'status': self.STATUS_PENDING,
-                'created_at': time.time(), 'model': model,
+                'owner_id': owner_id, 'conversation_id': cid,
+                'status': self.STATUS_PENDING, 'created_at': now, 'model': model,
             }
             self._subscribers[task_id] = []
             self._buffers[task_id] = []
-            h = self._history(owner_id)
-            h.append({'role': 'user', 'text': message})
+            # 追加用户消息（内存 + 落库），首条消息自动作为会话标题
+            meta = self._conv_meta[cid]
+            if not meta.get('title') or meta.get('title') == '新对话':
+                meta['title'] = message[:_TITLE_PREVIEW]
+                self._insert_conv(cid, owner_id, meta['title'],
+                                  meta['created_at'], now)
+            meta['updated_at'] = now
+            self._update_conv_time(cid, now)
+            msg = {'id': None, 'role': 'user', 'text': message,
+                   'created_at': now, 'task_id': task_id}
+            mid = self._append_db(cid, owner_id, 'user', message, now, task_id)
+            if mid is not None:
+                msg['id'] = mid
+            self._conv_msgs.setdefault(cid, []).append(msg)
         self._queue.put(task_id)
         return task_id, None
 
@@ -281,24 +540,31 @@ class AIChatManager:
 
     # ---------- 忙碌态轮询（供框架层 pollBusy 使用） ----------
     def tasks_state(self, owner_id):
-        """返回该用户任务概览，供宿主侧轻量轮询判断是否忙碌/有未读。
-
-        响应结构对齐 ExtensionHost.vue 的 pollBusy：
-          - active: 是否有正在执行的任务
-          - pending: 排队中的任务 id 列表
-          - history: 已结束任务列表（每项含 id，用于未读检测）
-        """
+        """返回该用户任务概览，供宿主侧轻量轮询判断是否忙碌/有未读。"""
         with self._lock:
             owned = [(tid, t) for tid, t in self._tasks.items()
                      if t.get('owner_id') == owner_id]
             active = any(t['status'] == self.STATUS_RUNNING for _, t in owned)
             pending = [tid for tid, t in owned if t['status'] == self.STATUS_PENDING]
             history = [
-                {'id': tid, 'status': t['status']}
+                {'id': tid, 'status': t['status'], 'conversation_id': t.get('conversation_id')}
                 for tid, t in owned
                 if t['status'] in (self.STATUS_COMPLETED, self.STATUS_FAILED)
             ]
         return {'active': active, 'pending': pending, 'history': history}
+
+    def is_busy(self):
+        """是否存在正在执行或排队中的任务（供宿主热重载保护使用）。
+
+        热重载会重新 import 整个插件模块，导致当前 ai_mgr 单例及其手上的
+        子进程 / SSE 订阅者被丢弃，正在跑的生成任务会断流。故 reload 前宿主
+        会征询此钩子，返回 True 时延迟重载直至空闲。
+        """
+        with self._lock:
+            for t in self._tasks.values():
+                if t.get('status') in (self.STATUS_RUNNING, self.STATUS_PENDING):
+                    return True
+        return False
 
     # ---------- worker ----------
     def _worker_loop(self):
@@ -321,11 +587,12 @@ class AIChatManager:
         with self._lock:
             info = self._tasks.get(task_id, {})
             owner_id = info.get('owner_id')
+            cid = info.get('conversation_id')
             model = info.get('model')
             info['status'] = self.STATUS_RUNNING
         # 构造 prompt：system + 最近若干轮历史 + 当前用户消息
         with self._lock:
-            h = list(self._history(owner_id))
+            h = list(self._conv_msgs.get(cid, [])) if cid else []
         recent = h[-(_MAX_HISTORY * 2):] if _MAX_HISTORY else h
         parts = [_SYSTEM_PROMPT, '']
         for turn in recent:
@@ -345,9 +612,19 @@ class AIChatManager:
         final = (reply or '').strip()
         if not final:
             final = '（助手未返回内容）'
-        # 把助手回复追加进历史（仅最终正文，不含思考过程）
+        # 把助手回复追加进会话历史（仅最终正文，不含思考过程），并落库
         with self._lock:
-            self._history(owner_id).append({'role': 'assistant', 'text': final})
+            now = time.time()
+            meta = self._conv_meta.get(cid)
+            if meta:
+                meta['updated_at'] = now
+                self._update_conv_time(cid, now)
+            msg = {'id': None, 'role': 'assistant', 'text': final,
+                   'created_at': now, 'task_id': task_id}
+            mid = self._append_db(cid, owner_id, 'assistant', final, now, task_id)
+            if mid is not None:
+                msg['id'] = mid
+            self._conv_msgs.setdefault(cid, []).append(msg)
             self._tasks[task_id]['status'] = self.STATUS_COMPLETED
         self._emit(task_id, _sse_block('assistant', final))
 
