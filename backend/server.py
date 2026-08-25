@@ -64,6 +64,13 @@ def create_blueprint(host):
             return jsonify({'success': False, 'message': '任务不存在'}), 404
         return jsonify({'success': True})
 
+    @bp.route('/tasks', methods=['GET'])
+    @host.login_required
+    def tasks():
+        # 供框架层 ExtensionHost.vue 的 pollBusy 轻量轮询（忙碌态/未读角标）。
+        # 返回 { active, pending, history }，对齐面板宿主的期望结构。
+        return jsonify(ai_mgr.tasks_state(g_user_id()))
+
     @bp.route('/stream', methods=['GET'])
     @host.login_required
     def stream():

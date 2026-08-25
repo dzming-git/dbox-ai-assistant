@@ -279,6 +279,27 @@ class AIChatManager:
         with self._lock:
             return self._tasks.get(task_id, {}).get('status')
 
+    # ---------- 忙碌态轮询（供框架层 pollBusy 使用） ----------
+    def tasks_state(self, owner_id):
+        """返回该用户任务概览，供宿主侧轻量轮询判断是否忙碌/有未读。
+
+        响应结构对齐 ExtensionHost.vue 的 pollBusy：
+          - active: 是否有正在执行的任务
+          - pending: 排队中的任务 id 列表
+          - history: 已结束任务列表（每项含 id，用于未读检测）
+        """
+        with self._lock:
+            owned = [(tid, t) for tid, t in self._tasks.items()
+                     if t.get('owner_id') == owner_id]
+            active = any(t['status'] == self.STATUS_RUNNING for _, t in owned)
+            pending = [tid for tid, t in owned if t['status'] == self.STATUS_PENDING]
+            history = [
+                {'id': tid, 'status': t['status']}
+                for tid, t in owned
+                if t['status'] in (self.STATUS_COMPLETED, self.STATUS_FAILED)
+            ]
+        return {'active': active, 'pending': pending, 'history': history}
+
     # ---------- worker ----------
     def _worker_loop(self):
         while True:

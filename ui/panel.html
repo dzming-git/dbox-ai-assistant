@@ -115,7 +115,7 @@ let bodyBuf = '';           // 当前助手消息正文累积
 // 宿主（ExtensionHost / ExtensionStandalone）通过 postMessage 下发 token
 let booted = false;
 function boot() {
-  if (booted) return;
+  if (!token) return;          // 无 token 不加载，避免 401 导致空（关键：兜底定时器可能在 token 到达前抢跑）
   booted = true;
   loadModels();
   loadHistory();
@@ -128,10 +128,11 @@ window.addEventListener('message', (e) => {
 });
 // 请求 token（宿主监听 DBOX_REQUEST_TOKEN 后回发 DBOX_TOKEN）
 window.parent && window.parent.postMessage({ type: 'DBOX_REQUEST_TOKEN', extId: 'ai_assistant' }, '*');
-// 兜底：若 token 延迟未到，重试一次请求
+// 兜底：若 token 延迟未到，重试一次请求；若已到则直接 boot（不会因 booted 标志被拦截）
 setTimeout(() => {
   if (!token) window.parent.postMessage({ type: 'DBOX_REQUEST_TOKEN', extId: 'ai_assistant' }, '*');
-}, 300);
+  else boot();
+}, 600);
 
 function api(p, o = {}) {
   return fetch(p, Object.assign({ headers: { 'Content-Type': 'application/json',
