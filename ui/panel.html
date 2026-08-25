@@ -135,7 +135,24 @@ setTimeout(() => {
 
 function api(p, o = {}) {
   return fetch(p, Object.assign({ headers: { 'Content-Type': 'application/json',
-    'Authorization': 'Bearer ' + token } }, o));
+    'Authorization': 'Bearer ' + token } }, o))
+    .then(r => {
+      if (!r.ok) {
+        return r.text().then(txt => {
+          let msg = txt;
+          try { const j = JSON.parse(txt); if (j && j.message) msg = j.message; } catch (_) {}
+          const err = new Error('HTTP ' + r.status + (msg ? '：' + msg : ''));
+          err.status = r.status; throw err;
+        });
+      }
+      return r;
+    });
+}
+function setStatus(msg, isErr) {
+  const el = document.getElementById('status');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.color = isErr ? 'var(--danger)' : '';
 }
 function esc(s) {
   return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -176,10 +193,18 @@ async function send() {
   const bodyEl = document.createElement('div'); bodyEl.className = 'body';
   ab.appendChild(thinkingEl); ab.appendChild(bodyEl);
 
-  const r = await api('/api/ext/ai_assistant/chat', { method: 'POST',
-    body: JSON.stringify({ message: text, model: document.getElementById('model').value }) });
-  const j = await r.json();
-  if (!j.success) { bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(j.message || '') + '</span>'; return; }
+  try {
+    const r = await api('/api/ext/ai_assistant/chat', { method: 'POST',
+      body: JSON.stringify({ message: text, model: document.getElementById('model').value }) });
+    const j = await r.json();
+    if (!j.success) { bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(j.message || '') + '</span>'; setStatus('发送失败：' + (j.message || ''), true); return; }
+    currentTask = j.task_id;
+    setRunning(true);
+  } catch (e) {
+    bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(e.message || '') + '</span>';
+    setStatus('发送请求失败：' + (e.message || e) + '（请确认已登录且扩展宿主 8093 运行中）', true);
+    return;
+  }
   currentTask = j.task_id;
   setRunning(true);
 
@@ -223,7 +248,10 @@ async function loadModels() {
       const o = document.createElement('option'); o.value = m.id; o.textContent = m.name; sel.appendChild(o);
     });
     if (!sel.options.length) { const o = document.createElement('option'); o.value = ''; o.textContent = '默认模型'; sel.appendChild(o); }
-  } catch (_) {}
+    if (j.models && !j.models.length) setStatus('未获取到模型，请检查 AI 助手后端配置', true);
+  } catch (e) {
+    setStatus('加载模型失败：' + (e.message || e) + '（请确认已登录且扩展宿主 8093 运行中）', true);
+  }
 }
 async function loadHistory() {
   try {
@@ -232,7 +260,9 @@ async function loadHistory() {
       const { bubble } = addMsg(turn.role);
       bubble.innerHTML = renderMarkdown(turn.text);
     });
-  } catch (_) {}
+  } catch (e) {
+    setStatus('加载历史失败：' + (e.message || e), true);
+  }
 }
 
 // ---------- 绑定 ----------
