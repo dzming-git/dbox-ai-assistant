@@ -13,6 +13,7 @@
 - POST '/conversations/<cid>/rename'    重命名会话（body 带 title）
 - DELETE '/conversations/<cid>'         删除会话
 """
+from functools import wraps
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 from .engine import ai_mgr, list_models
@@ -186,8 +187,25 @@ def create_blueprint(host):
             return jsonify({'success': False, 'message': '会话不存在'}), 404
         return jsonify({'success': True})
 
+    def _sse_auth(f):
+        """SSE 鉴权：EventSource 无法携带 Authorization header，故同时支持
+        query 参数 ?token=（浏览器唯一可行的带凭证方式）与 Authorization header。"""
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            token = (request.args.get('token') or '').strip()
+            if not token:
+                _auth = request.headers.get('Authorization', '')
+                token = _auth[7:] if _auth.startswith('Bearer ') else _auth
+            user = host.auth_user(token) if token else None
+            if user is None:
+                return jsonify({'success': False, 'message': '未授权', 'code': 401}), 401
+            from flask import g
+            g.user_id, g.role, g.username = user
+            return f(*args, **kwargs)
+        return decorated
+
     @bp.route('/stream', methods=['GET'])
-    @host.login_required
+    @_sse_auth
     def stream():
         task_id = (request.args.get('task_id') or '').strip()
         if not task_id:
