@@ -202,7 +202,91 @@ class AIChatManager:
                 return
             self._initialized = True
         self._init_db()
+        # 兼容历史库路径漂移：早期宿主按 manifest id=ai_assistant（下划线）落库，
+        # 现宿主强制 key=文件夹名 ai-assistant（连字符）；且 data_dir root 在
+        # DBOX_DATA_DIR 设置/未设置时分别落到 ProgramData 与项目根 data/。
+        # 这导致同一份对话分散在多个 chat.db，重启后读到空库即表现为「记录消失」。
+        # 启动时把所有分叉库合并进当前 canonical 库，保证历史不丢。
+        self._merge_orphan_dbs()
         self._load_from_db()
+
+    def _merge_orphan_dbs(self):
+        """把历史上因 key 命名/数据目录漂移而分散的 chat.db 合并进当前 canonical 库。
+
+        早期宿主按 manifest id=ai_assistant（下划线）落库，现强制 key=文件夹名
+        ai-assistant（连字符）；且 DBOX_DATA_DIR 设置与否分别落到 ProgramData 与
+        项目根 data/。这导致同一份对话分散在多个 chat.db，重启后读到空库即表现为
+        「记录消失」。这里扫描所有可能的分叉库，把其中的会话与消息合并进当前库。
+        """
+        db = getattr(self, '_db', None)
+        if not db or not getattr(self, '_db_path', None):
+            return
+        import glob as _glob
+        cur_path = os.path.normcase(os.path.normpath(self._db_path))
+        # 推导候选分叉库路径：
+        # 1) 同 data_dir 下 key 的另一拼写（连字符 <-> 下划线）
+        # 2) 另一 data_dir 根（ProgramData 与项目根 data/）下的同名库
+        cands = set()
+        for key_var in ('ai-assistant', 'ai_assistant'):
+            # 当前 db 路径中以 key 片段替换
+            parts = self._db_path.replace('/', os.sep).split(os.sep)
+            for i, seg in enumerate(parts):
+                if seg in ('ai-assistant', 'ai_assistant'):
+                    alt = parts[:i] + [key_var] + parts[i + 1:]
+                    cands.add(os.path.normcase(os.path.normpath(os.sep.join(alt))))
+        # 也直接列举常见根
+        for root in (r'C:\ProgramData\Dbox\data',
+                     os.path.join(os.getcwd(), 'data'),
+                     os.path.join(os.path.dirname(os.path.dirname(
+                         os.path.dirname(os.path.dirname(self._db_path)))), 'data')):
+            for key_var in ('ai-assistant', 'ai_assistant'):
+                cands.add(os.path.normcase(os.path.normpath(
+                    os.path.join(root, 'plugins', key_var, 'db', 'chat.db'))))
+        cands.discard(cur_path)
+        merged = 0
+        for cand in cands:
+            if not os.path.isfile(cand):
+                continue
+            try:
+                import sqlite3 as _sql
+                src = _sql.connect(cand, check_same_thread=False)
+                src.row_factory = _sql.Row
+                convs = src.execute(
+                    'SELECT id, owner_id, title, created_at, updated_at '
+                    'FROM conversations').fetchall()
+                msgs = src.execute(
+                    'SELECT conversation_id, owner_id, role, text, created_at, task_id '
+                    'FROM messages ORDER BY id').fetchall()
+                if not convs and not msgs:
+                    src.close()
+                    continue
+                with self._lock:
+                    for c in convs:
+                        db.execute(
+                            'INSERT OR IGNORE INTO conversations '
+                            '(id, owner_id, title, created_at, updated_at) '
+                            'VALUES (?,?,?,?,?)',
+                            (c['id'], c['owner_id'], c['title'],
+                             c['created_at'], c['updated_at']))
+                    for m in msgs:
+                        db.execute(
+                            'INSERT INTO messages '
+                            '(conversation_id, owner_id, role, text, created_at, task_id) '
+                            'SELECT ?,?,?,?,?,? WHERE NOT EXISTS ('
+                            'SELECT 1 FROM messages WHERE conversation_id=? '
+                            'AND role=? AND text=? AND created_at=?)',
+                            (m['conversation_id'], m['owner_id'], m['role'], m['text'],
+                             m['created_at'], m['task_id'], m['conversation_id'],
+                             m['role'], m['text'], m['created_at']))
+                    db.commit()
+                src.close()
+                merged += 1
+                _logger.info('AI 助手合并历史库成功: %s (%d 会话/%d 消息)',
+                             cand, len(convs), len(msgs))
+            except Exception as e:
+                _logger.error('AI 助手合并历史库失败 %s: %s', cand, e)
+        if merged:
+            _logger.info('AI 助手共合并 %d 个历史分叉库', merged)
         self._start_worker()
         _logger.info('AI 助手引擎已初始化（归零版：纯多轮对话，会话级历史落库）')
 
