@@ -323,6 +323,8 @@ class AIChatManager:
                 'FROM messages ORDER BY id').fetchall()
             with self._lock:
                 for cid, owner_id, title, created_at, updated_at in conv_rows:
+                    # owner_id 统一转字符串，避免与 JWT 的 int user_id 类型不一致
+                    owner_id = None if owner_id is None else str(owner_id)
                     self._conv_meta[cid] = {
                         'owner_id': owner_id, 'title': title,
                         'created_at': created_at, 'updated_at': updated_at}
@@ -331,7 +333,8 @@ class AIChatManager:
                     if cid not in self._conv_meta:
                         # 孤儿消息：会话元数据缺失时补一个占位会话，保证消息不丢
                         self._conv_meta[cid] = {
-                            'owner_id': owner_id, 'title': (text or '')[:_TITLE_PREVIEW],
+                            'owner_id': None if owner_id is None else str(owner_id),
+                            'title': (text or '')[:_TITLE_PREVIEW],
                             'created_at': created_at or time.time(),
                             'updated_at': created_at or time.time()}
                         self._conv_msgs.setdefault(cid, [])
@@ -418,8 +421,17 @@ class AIChatManager:
 
     # ---------- 会话管理（内存 + 落库）----------
     def _owner_convs(self, owner_id):
-        """返回该用户会话 id 列表（按 updated_at 倒序）。"""
-        cids = [c for c, m in self._conv_meta.items() if m.get('owner_id') == owner_id]
+        """返回该用户会话 id 列表（按 updated_at 倒序）。
+
+        owner_id 统一按字符串比较：JWT 的 user_id 是 int（如 1），而历史库
+        里存的是 str（'1'），若直接 `==` 会因类型不一致过滤掉全部历史，
+        表现为「重启后聊天记录丢失」。这里两侧都转 str 归一化。
+        """
+        def _norm(v):
+            return None if v is None else str(v)
+        owner_str = _norm(owner_id)
+        cids = [c for c, m in self._conv_meta.items()
+                if _norm(m.get('owner_id')) == owner_str]
         cids.sort(key=lambda c: self._conv_meta[c].get('updated_at', 0), reverse=True)
         return cids
 
@@ -473,7 +485,7 @@ class AIChatManager:
     def delete_conversation(self, owner_id, cid):
         with self._lock:
             meta = self._conv_meta.get(cid)
-            if not meta or meta.get('owner_id') != owner_id:
+            if not meta or str(meta.get('owner_id')) != str(owner_id):
                 return False
             self._conv_meta.pop(cid, None)
             self._conv_msgs.pop(cid, None)
@@ -483,7 +495,7 @@ class AIChatManager:
     def clear_conversation(self, owner_id, cid):
         with self._lock:
             meta = self._conv_meta.get(cid)
-            if not meta or meta.get('owner_id') != owner_id:
+            if not meta or str(meta.get('owner_id')) != str(owner_id):
                 return False
             self._conv_msgs[cid] = []
             self._db_clear_conv(cid)
@@ -492,7 +504,7 @@ class AIChatManager:
     def rename_conversation(self, owner_id, cid, title):
         with self._lock:
             meta = self._conv_meta.get(cid)
-            if not meta or meta.get('owner_id') != owner_id:
+            if not meta or str(meta.get('owner_id')) != str(owner_id):
                 return False
             title = (title or '').strip() or '新对话'
             meta['title'] = title
@@ -534,6 +546,9 @@ class AIChatManager:
         message = (message or '').strip()
         if not message:
             return None, '消息为空'
+        # 统一 owner_id 为字符串，与历史库存储（str）保持一致，避免 int/str 类型
+        # 不匹配导致会话归属判断与历史查询把记录过滤掉（表现为「记录丢失」）。
+        owner_id = None if owner_id is None else str(owner_id)
         with self._lock:
             # 解析目标会话：显式指定则校验归属；否则取最近会话，无则建默认
             if conversation_id:
@@ -627,7 +642,7 @@ class AIChatManager:
         """返回该用户任务概览，供宿主侧轻量轮询判断是否忙碌/有未读。"""
         with self._lock:
             owned = [(tid, t) for tid, t in self._tasks.items()
-                     if t.get('owner_id') == owner_id]
+                     if str(t.get('owner_id')) == str(owner_id)]
             active = any(t['status'] == self.STATUS_RUNNING for _, t in owned)
             pending = [tid for tid, t in owned if t['status'] == self.STATUS_PENDING]
             history = [
