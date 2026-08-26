@@ -60,9 +60,9 @@
   .conv-bar button:hover { color: var(--text); border-color: var(--accent-2); }
   .conv-bar button.danger:hover { color: var(--danger); border-color: var(--danger); }
   .messages {
-    flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px;
+    flex: 1; overflow-y: auto; overflow-x: hidden; padding: 16px; display: flex; flex-direction: column; gap: 14px;
   }
-  .msg { display: flex; gap: 10px; max-width: 100%; align-items: flex-start; }
+  .msg { display: flex; gap: 10px; max-width: 100%; min-width: 0; align-items: flex-start; }
   .msg .avatar {
     width: 30px; height: 30px; border-radius: 8px; flex: 0 0 auto;
     display: flex; align-items: center; justify-content: center; font-size: 14px;
@@ -74,13 +74,14 @@
   .msg.user .bubble { margin-left: auto; }
   .bubble {
     padding: 10px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word;
+    overflow-wrap: anywhere; min-width: 0;
     background: var(--ai-bubble); border: 1px solid var(--border); overflow-x: auto;
     max-width: min(78%, 640px);
   }
   .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
   .msg.user .meta { text-align: right; }
-  .msg.user .bubble-wrap { display: flex; flex-direction: column; align-items: flex-end; }
-  .msg.assistant .bubble-wrap { display: flex; flex-direction: column; align-items: flex-start; }
+  .msg.user .bubble-wrap { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
+  .msg.assistant .bubble-wrap { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
   .msg.user .bubble { background: var(--user-bubble); border-color: transparent; }
   .msg.assistant .bubble { background: var(--ai-bubble); }
   .bubble .thinking {
@@ -195,7 +196,7 @@ const CONV_KEY = 'ai_assistant_conv_' + EXT_KEY;
 // 宿主（ExtensionHost / ExtensionStandalone）通过 postMessage 下发 token
 let booted = false;
 function boot() {
-  if (!token) return;          // 无 token 不加载，避免 401 导致空（关键：兜底定时器可能在 token 到达前抢跑）
+  if (!getAuthToken()) return; // 无可用 token 不加载，避免 401 导致空（优先用 localStorage 实时 token）
   if (booted) return;          // 幂等：token 事件/兜底定时器/末尾 IIFE 可能多次触发，只初始化一次，避免历史被重复加载成多份
   booted = true;
   loadModels();
@@ -215,20 +216,70 @@ setTimeout(() => {
   else boot();
 }, 600);
 
-function api(p, o = {}) {
-  return fetch(p, Object.assign({ headers: { 'Content-Type': 'application/json',
-    'Authorization': 'Bearer ' + token } }, o))
-    .then(r => {
-      if (!r.ok) {
-        return r.text().then(txt => {
-          let msg = txt;
-          try { const j = JSON.parse(txt); if (j && j.message) msg = j.message; } catch (_) {}
-          const err = new Error('HTTP ' + r.status + (msg ? '：' + msg : ''));
-          err.status = r.status; throw err;
-        });
+// 取最新可用的 token：框架在父页用 refresh_token 静默刷新 JWT 后会写回
+// localStorage['token']（见 webui src/api/client.ts 的 401 拦截器），父页 2s 轮询也会
+// 触发刷新。面板只在挂载时经 postMessage 拿到过一次 token 并缓存进变量 token，
+// 若不实时回读 localStorage，JWT 过期后面板会一直用旧 token 发请求 → 401 网络错误，
+// 必须手动刷新页面才能恢复。这里优先读 localStorage，并兼容 sessionStorage 与注入 token。
+function getAuthToken() {
+  return localStorage.getItem('token')
+    || localStorage.getItem('access_token')
+    || sessionStorage.getItem('token')
+    || token
+    || '';
+}
+
+// 向父页重新索要 token（父页会经 postMessage 回发最新值）；兜底 500ms 后用现有值重试，
+// 避免父页未响应时请求永久挂起。
+function requestFreshToken() {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return; done = true;
+      window.removeEventListener('message', onTok);
+      resolve();
+    };
+    const onTok = (e) => {
+      if (e.data && e.data.type === 'DBOX_TOKEN' && e.data.token) {
+        token = e.data.token; // 同步到缓存变量；boot() 幂等不会重复初始化
+        finish();
       }
-      return r;
-    });
+    };
+    window.addEventListener('message', onTok);
+    window.parent && window.parent.postMessage({ type: 'DBOX_REQUEST_TOKEN', extId: EXT_KEY }, '*');
+    setTimeout(finish, 500);
+  });
+}
+
+async function api(p, o = {}) {
+  o = o || {};
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, o.headers || {});
+  headers['Authorization'] = 'Bearer ' + getAuthToken();
+  let r;
+  try {
+    r = await fetch(p, Object.assign({}, o, { headers }));
+  } catch (netErr) {
+    const err = new Error('网络错误：' + (netErr && netErr.message ? netErr.message : netErr));
+    err.status = 0; throw err;
+  }
+  if (r.ok) return r;
+  // 401：先让父页刷新并回发最新 token，再重试一次（避免陈旧 token 反复 401 导致“网络错误”）
+  if (r.status === 401) {
+    await requestFreshToken();
+    const h2 = Object.assign({ 'Content-Type': 'application/json' }, o.headers || {});
+    h2['Authorization'] = 'Bearer ' + getAuthToken();
+    try { r = await fetch(p, Object.assign({}, o, { headers: h2 })); }
+    catch (netErr) {
+      const err = new Error('网络错误：' + (netErr && netErr.message ? netErr.message : netErr));
+      err.status = 0; throw err;
+    }
+  }
+  if (r.ok) return r;
+  const txt = await r.text();
+  let msg = txt;
+  try { const j = JSON.parse(txt); if (j && j.message) msg = j.message; } catch (_) {}
+  const err = new Error('HTTP ' + r.status + (msg ? '：' + msg : ''));
+  err.status = r.status; throw err;
 }
 function setStatus(msg, isErr) {
   const el = document.getElementById('status');
@@ -483,8 +534,10 @@ async function send() {
     return;
   }
 
-  // SSE
-  const es = new EventSource(API_PREFIX + 'stream?task_id=' + encodeURIComponent(currentTask));
+  // SSE：EventSource 无法携带 Authorization header，故把 token 放进 query 参数
+  // （浏览器侧唯一可行的带凭证方式；后端 /stream 已支持 ?token=）。
+  const es = new EventSource(API_PREFIX + 'stream?task_id=' + encodeURIComponent(currentTask)
+    + '&token=' + encodeURIComponent(getAuthToken()));
   es.addEventListener('token', (e) => {
     clearPending();
     bodyBuf += e.data; bodyEl.innerHTML = renderMarkdown(bodyBuf); scrollBottom();
