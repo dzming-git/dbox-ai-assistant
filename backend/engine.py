@@ -591,6 +591,10 @@ class AIChatManager:
             buf = list(self._buffers.get(task_id, []))
             sub_q = queue.Queue()
             self._subscribers.setdefault(task_id, []).append(sub_q)
+        # 先 yield 一个 SSE 注释块，确保响应头尽早发出（Flask 流式响应在
+        # 生成器首次 yield 时才 flush 响应头；若首事件迟迟未产生，部分客户端
+        # /代理会一直等待响应头而表现为“连接中断”。注释行对前端 EventSource 透明）。
+        yield ': connected\n\n'
         # 先回放已产生的缓冲（重连续接）
         for blk in buf:
             yield blk
