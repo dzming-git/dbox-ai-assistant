@@ -703,12 +703,21 @@ class AIChatManager:
                      if str(t.get('owner_id')) == str(owner_id)]
             active = any(t['status'] == self.STATUS_RUNNING for _, t in owned)
             pending = [tid for tid, t in owned if t['status'] == self.STATUS_PENDING]
+            # 进行中的任务：供前端刷新页面后恢复订阅。订阅时后端会回放已生成的
+            # 内容（_buffers），因此刷新不会丢回答；前端据此跳过历史里「进行中」
+            # 的助手消息，避免与回放内容重复渲染（表现为文字错行/重复）。
+            running = [
+                {'id': tid, 'status': t['status'],
+                 'conversation_id': t.get('conversation_id')}
+                for tid, t in owned if t['status'] == self.STATUS_RUNNING
+            ]
             history = [
                 {'id': tid, 'status': t['status'], 'conversation_id': t.get('conversation_id')}
                 for tid, t in owned
                 if t['status'] in (self.STATUS_COMPLETED, self.STATUS_FAILED)
             ]
-        return {'active': active, 'pending': pending, 'history': history}
+        return {'active': active, 'pending': pending,
+                'running': running, 'history': history}
 
     def is_busy(self):
         """是否存在正在执行或排队中的任务（供宿主热重载保护使用）。

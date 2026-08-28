@@ -181,6 +181,10 @@
 <script>
 let token = null;
 let currentTask = null;     // 进行中的 task_id
+// 服务端「生成中」的任务 id 集合。刷新页面后用它：① 渲染历史时跳过这些助手消息
+// （避免与 SSE 回放内容重复，表现为文字错行/重复）② 重新订阅续传，避免回答丢失。
+let runningTaskIds = new Set();
+let runningTaskConv = {};   // task_id -> conversation_id
 let currentConvId = null;    // 当前会话 id（持久化到 localStorage）
 let thinkingBuf = '';       // 当前助手消息的思考累积
 let bodyBuf = '';           // 当前助手消息正文累积
@@ -200,7 +204,11 @@ function boot() {
   if (booted) return;          // 幂等：token 事件/兜底定时器/末尾 IIFE 可能多次触发，只初始化一次，避免历史被重复加载成多份
   booted = true;
   loadModels();
-  loadConversations();
+  // 顺序要求：先拿到「生成中」任务，再加载会话——渲染历史时才能跳过这些
+  // 助手消息，改由 SSE 回放统一渲染；加载完再恢复订阅续传剩余内容。
+  // 注：loadConversations → loadMessages 内部会调用 tryResumeForConv 恢复订阅，
+  // 这里只需保证 running 列表先就绪即可。
+  fetchRunningTasks().then(() => loadConversations());
 }
 window.addEventListener('message', (e) => {
   if (e.data && e.data.type === 'DBOX_TOKEN' && e.data.token) {
@@ -444,6 +452,7 @@ async function loadMessages(cid) {
     const r = await api(API_PREFIX + 'conversations/' + encodeURIComponent(cid) + '/messages');
     const j = await r.json();
     renderMessages(j.messages || []);
+    tryResumeForConv(cid);   // 该会话若有生成中的任务则恢复订阅，避免内容被跳过又收不到
     scrollBottom();
   } catch (e) {
     setStatus('加载消息失败：' + (e.message || e), true);
@@ -453,6 +462,14 @@ function renderMessages(msgs) {
   const box = document.getElementById('messages');
   box.innerHTML = '<div class="empty" id="empty">直接输入消息开始对话。可让它读写文件、运行命令。</div>';
   (msgs || []).forEach(turn => {
+    // 仅当该助手消息所属任务既在「生成中」、又属于当前会话时才跳过：
+    // 这种情况下启动流程会恢复订阅，后端回放已生成内容，由流式路径统一渲染，
+    // 避免同一段内容出现两份（历史一份 + 回放一份）造成错行/重复。
+    // 若任务属于别的会话（不会恢复订阅、也没有回放），则必须正常渲染，
+    // 否则这段内容会永久看不到。
+    if (turn.role === 'assistant' && turn.task_id
+        && runningTaskIds.has(turn.task_id)
+        && runningTaskConv[turn.task_id] === currentConvId) return;
     const { bubble } = addMsg(turn.role, turn.text, turn.created_at);
     if (turn.role === 'assistant') {
       // 历史助手消息也用 .body 包裹，与流式路径一致，确保 applyCollapse 能找到容器并折叠
@@ -575,6 +592,89 @@ async function send() {
     loadConversations();
   });
 }
+// ---------- 刷新后恢复「生成中」的任务 ----------
+// 原先刷新页面后 currentTask 丢失、SSE 不重连，正在生成的回答收不到，已落盘的
+// 部分还可能与本地残留叠加显示两份（文字错行/重复）。这里在启动时查询服务端
+// 仍在生成的任务并重新订阅：后端会回放已生成的全部内容，再续传剩余部分。
+async function fetchRunningTasks() {
+  try {
+    const r = await api(API_PREFIX + 'tasks');
+    const j = await r.json();
+    const running = j.running || [];
+    runningTaskIds = new Set(running.map(t => t.id));
+    runningTaskConv = {};
+    running.forEach(t => { runningTaskConv[t.id] = t.conversation_id; });
+    return running;
+  } catch (e) {
+    runningTaskIds = new Set();
+    runningTaskConv = {};
+    return [];
+  }
+}
+
+function resumeRunningTask(taskId) {
+  if (currentTask) return;   // 已有进行中的订阅则不重复
+  currentTask = taskId;
+  const { bubble: ab } = addMsg('assistant');
+  const thinkingEl = document.createElement('div'); thinkingEl.className = 'thinking';
+  const bodyEl = document.createElement('div'); bodyEl.className = 'body';
+  const pendingEl = document.createElement('div'); pendingEl.className = 'pending';
+  pendingEl.innerHTML = '<span class="spinner"></span> AI 正在思考…';
+  ab.appendChild(thinkingEl); ab.appendChild(bodyEl); ab.appendChild(pendingEl);
+  let pendingCleared = false;
+  function clearPending() {
+    if (pendingCleared) return; pendingCleared = true;
+    const p = ab.querySelector('.pending'); if (p) p.remove();
+  }
+  setRunning(true);
+  let bodyBuf = '', thinkingBuf = '';
+  const es = new EventSource(API_PREFIX + 'stream?task_id=' + encodeURIComponent(taskId)
+    + '&token=' + encodeURIComponent(getAuthToken()));
+  es.addEventListener('token', (e) => {
+    clearPending();
+    bodyBuf += e.data; bodyEl.innerHTML = renderMarkdown(bodyBuf); scrollBottom();
+  });
+  es.addEventListener('thinking', (e) => {
+    clearPending();
+    thinkingBuf += e.data; thinkingEl.textContent = thinkingBuf; scrollBottom();
+  });
+  es.addEventListener('assistant', (e) => {
+    clearPending();
+    bodyBuf = e.data; bodyEl.innerHTML = renderMarkdown(bodyBuf); scrollBottom();
+  });
+  es.addEventListener('error', (e) => {
+    clearPending();
+    bodyEl.innerHTML += '<div style="color:var(--danger)">错误：' + esc(e.data) + '</div>';
+  });
+  es.onerror = () => {
+    clearPending();
+    bodyEl.innerHTML += '<div style="color:var(--danger)">连接中断，请重试</div>';
+    setRunning(false); currentTask = null;
+  };
+  es.addEventListener('done', () => {
+    es.close();
+    thinkingEl.remove();
+    if (!pendingCleared) {
+      bodyEl.innerHTML = '<span style="color:var(--muted)">（没有收到回复）</span>';
+      const p = ab.querySelector('.pending'); if (p) p.remove();
+    }
+    applyCollapse(ab);
+    currentTask = null; setRunning(false);
+    document.getElementById('status').textContent = '';
+    loadConversations();
+  });
+  scrollBottom();
+}
+
+// 某个会话里若存在「生成中」的任务，则恢复订阅续传（渲染历史时会跳过它的
+// 助手消息，必须在这里补上订阅，否则那段内容会既不显示也收不到）。
+function tryResumeForConv(cid) {
+  if (!cid) return;
+  for (const tid of runningTaskIds) {
+    if (runningTaskConv[tid] === cid) { resumeRunningTask(tid); break; }
+  }
+}
+
 function setRunning(run) {
   document.getElementById('sendBtn').disabled = run;
   document.getElementById('cancelBtn').style.display = run ? '' : 'none';
