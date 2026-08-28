@@ -39,6 +39,11 @@ _TITLE_PREVIEW = 24
 # 会话列表 preview 取最近一条消息的前 N 个字符。
 _MSG_PREVIEW = 48
 
+# 流式回复增量落盘的节流间隔（秒）。AI 回复只在生成完毕后写库的话，过程中
+# 刷新页面（或进程重启/取消）会让已生成内容全丢；按此间隔把当前已生成的
+# 部分写库，结束时再用最终正文更新同一条记录。
+_STREAM_FLUSH_SEC = 2.0
+
 # 极简系统提示：直接动手、中文说明，仅此而已。
 _SYSTEM_PROMPT = (
     '你是嵌入在媒体库管理后台里的 AI 助手，拥有读写文件、运行命令的真实能力。\n'
@@ -185,6 +190,8 @@ class AIChatManager:
         # 会话级内存缓存（落库后的镜像，重启从 DB 重建）
         self._conv_meta = {}                  # cid -> {owner_id, title, created_at, updated_at}
         self._conv_msgs = {}                  # cid -> [ {id, role, text, created_at, task_id}, ... ]
+        # 流式回复增量落盘的节流时间戳（task_id -> 上次写库时间）
+        self._stream_flush_at = {}
 
     # ---------- 初始化 ----------
     def init(self, host, vault=None, tasks=None):
@@ -375,6 +382,53 @@ class AIChatManager:
             return mid
         except Exception as e:
             _logger.error('AI 助手历史写入失败: %s', e)
+            return None
+
+    def _sync_stream_msg(self, cid, mid, text, created_at, task_id):
+        """把流式中的助手消息同步进内存 _conv_msgs（已存在则更新，避免重复插入）。"""
+        msgs = self._conv_msgs.setdefault(cid, [])
+        for m in msgs:
+            if m.get('task_id') == task_id and m.get('role') == 'assistant':
+                m['text'] = text
+                m['created_at'] = created_at
+                if mid is not None:
+                    m['id'] = mid
+                return
+        msgs.append({'id': mid, 'role': 'assistant', 'text': text,
+                     'created_at': created_at, 'task_id': task_id})
+
+    def _upsert_assistant_msg(self, cid, owner_id, text, created_at, task_id):
+        """流式回复增量落盘：按 task_id 找该任务已写入的助手消息，有则更新，无则插入。
+
+        原实现只在整条回复生成完毕后才写库，流式过程中刷新页面（或进程重启、
+        取消、异常）会让已生成的内容全部丢失。这里让流式每间隔一段时间就把
+        当前已生成的部分写库，结束时再用最终正文更新同一条记录。
+        """
+        db = getattr(self, '_db', None)
+        if not db:
+            return None
+        try:
+            with self._lock:
+                row = db.execute(
+                    'SELECT id FROM messages WHERE task_id=? AND role=? '
+                    'ORDER BY id LIMIT 1', (task_id, 'assistant')).fetchone()
+                if row:
+                    db.execute('UPDATE messages SET text=?, created_at=? WHERE id=?',
+                               (text, created_at, row[0]))
+                    db.commit()
+                    mid = row[0]
+                else:
+                    cur = db.execute(
+                        'INSERT INTO messages'
+                        '(conversation_id, owner_id, role, text, created_at, task_id) '
+                        'VALUES (?,?,?,?,?,?)',
+                        (cid, owner_id, 'assistant', text, created_at, task_id))
+                    db.commit()
+                    mid = cur.lastrowid
+                self._sync_stream_msg(cid, mid, text, created_at, task_id)
+            return mid
+        except Exception as e:
+            _logger.error('AI 助手流式消息写入失败: %s', e)
             return None
 
     def _update_conv_time(self, cid, updated_at):
@@ -722,12 +776,11 @@ class AIChatManager:
             if meta:
                 meta['updated_at'] = now
                 self._update_conv_time(cid, now)
-            msg = {'id': None, 'role': 'assistant', 'text': final,
-                   'created_at': now, 'task_id': task_id}
-            mid = self._append_db(cid, owner_id, 'assistant', final, now, task_id)
-            if mid is not None:
-                msg['id'] = mid
-            self._conv_msgs.setdefault(cid, []).append(msg)
+            # 用最终正文更新同一条记录（流式期间已增量写过则 UPDATE，否则 INSERT）
+            mid = self._upsert_assistant_msg(cid, owner_id, final, now, task_id)
+            if mid is None:
+                # 落库不可用（无 DB/异常）时至少保住内存态
+                self._sync_stream_msg(cid, None, final, now, task_id)
             self._tasks[task_id]['status'] = self.STATUS_COMPLETED
         self._emit(task_id, _sse_block('assistant', final))
 
@@ -824,6 +877,14 @@ class AIChatManager:
             if delta_text:
                 full.append(delta_text)
                 self._emit(task_id, _sse_block('token', delta_text))
+                # 流式增量落盘（节流）：让刷新页面/重启后仍能看到已生成的部分
+                now_t = time.time()
+                if now_t - self._stream_flush_at.get(task_id, 0) >= _STREAM_FLUSH_SEC:
+                    self._stream_flush_at[task_id] = now_t
+                    _info = self._tasks.get(task_id, {})
+                    self._upsert_assistant_msg(
+                        _info.get('conversation_id'), _info.get('owner_id'),
+                        ''.join(full).strip(), now_t, task_id)
             if delta_think:
                 self._emit(task_id, _sse_block('thinking', delta_think))
 
