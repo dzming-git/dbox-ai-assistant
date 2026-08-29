@@ -128,6 +128,16 @@
   .bubble hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
   .bubble a { color: var(--accent); text-decoration: underline; word-break: break-all; }
   .bubble p { margin: 4px 0; }
+  .bubble table {
+    border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px;
+    overflow-x: auto; display: block;
+  }
+  .bubble th, .bubble td {
+    border: 1px solid var(--border); padding: 6px 10px; text-align: left;
+    white-space: nowrap;
+  }
+  .bubble th { background: rgba(109,139,255,.1); font-weight: 600; }
+  .bubble tr:nth-child(even) td { background: rgba(255,255,255,.02); }
   /* 长回答默认收起：超过 3 行折叠，仅显示约 3 行；点“展开全文”展开，收起后按钮锚定回原位置 */
   .collapsible.collapsed { overflow: hidden; position: relative; }
   .collapsible.collapsed::after {
@@ -377,6 +387,26 @@ function renderMarkdown(text) {
   html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
   // 链接 [text](url)
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // 表格：| col | col | + 分隔行 + 数据行 → <table>
+  // 先识别连续的表格行块（以 | 开头/结尾的行），整体替换
+  html = html.replace(
+    /((?:^\|.+\|\n?)+)/gm,
+    function (block) {
+      var lines = block.trim().split('\n');
+      if (lines.length < 2) return block; // 至少需要表头+分隔
+      // 检查第二行是否为分隔行（含 -）
+      var isSep = /^\|?\s*[:\-]+\s*\|/.test(lines[1] || '');
+      if (!isSep) return block;
+      var hCells = lines[0].split('|').filter(function(c){return c.trim();});
+      var thead = '<tr>' + hCells.map(function(c){return '<th>' + c.trim() + '</th>';}).join('') + '</tr>';
+      var bodyRows = [];
+      for (var i = 2; i < lines.length; i++) {
+        var cells = lines[i].split('|').filter(function(c){return c.trim();});
+        bodyRows.push('<tr>' + cells.map(function(c){return '<td>' + c.trim() + '</td>';}).join('') + '</tr>');
+      }
+      return '<table><thead>' + thead + '</thead><tbody>' + bodyRows.join('') + '</tbody></table>';
+    }
+  );
   // 分割线
   html = html.replace(/^---+$/gm, '<hr>');
   // 引用块 > （支持多行连续引用）
