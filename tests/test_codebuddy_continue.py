@@ -23,7 +23,7 @@ _SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src', 'ext
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-import ai_assistant as m
+import codebuddy as m
 import platform_client as pc
 
 

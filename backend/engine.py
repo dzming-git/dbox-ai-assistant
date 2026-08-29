@@ -1,4 +1,4 @@
-"""AI 助手对话引擎（归零版）。
+"""CodeBuddy对话引擎（归零版）。
 
 设计原则：回到最原始的聊天体验——就像在 IDE 里和助手对话一样。
 - 纯多轮文本对话，流式输出（SSE）。
@@ -19,7 +19,7 @@ import threading
 import subprocess
 import logging
 
-_logger = logging.getLogger('extensions_host.ai_assistant')
+_logger = logging.getLogger('extensions_host.codebuddy')
 
 try:
     from subprocess import CREATE_NEW_PROCESS_GROUP
@@ -46,7 +46,7 @@ _STREAM_FLUSH_SEC = 2.0
 
 # 极简系统提示：直接动手、中文说明，仅此而已。
 _SYSTEM_PROMPT = (
-    '你是嵌入在媒体库管理后台里的 AI 助手，拥有读写文件、运行命令的真实能力。\n'
+    '你是嵌入在媒体库管理后台里的 CodeBuddy，拥有读写文件、运行命令的真实能力。\n'
     '当用户布置具体任务（如修改代码、创建/删除文件、执行命令等）时，请直接动手完成，'
     '不要只罗列步骤或描述做法；完成后用简简体中文简要说明你做了什么。\n'
     '若只是闲聊或提问，则正常简洁回答即可。\n'
@@ -203,7 +203,7 @@ class AIChatManager:
             try:
                 self._db_path = host.db('chat')
             except Exception as e:
-                _logger.error('AI 助手历史库路径获取失败: %s', e)
+                _logger.error('CodeBuddy历史库路径获取失败: %s', e)
         with self._lock:
             if self._initialized:
                 return
@@ -288,14 +288,14 @@ class AIChatManager:
                     db.commit()
                 src.close()
                 merged += 1
-                _logger.info('AI 助手合并历史库成功: %s (%d 会话/%d 消息)',
+                _logger.info('CodeBuddy合并历史库成功: %s (%d 会话/%d 消息)',
                              cand, len(convs), len(msgs))
             except Exception as e:
-                _logger.error('AI 助手合并历史库失败 %s: %s', cand, e)
+                _logger.error('CodeBuddy合并历史库失败 %s: %s', cand, e)
         if merged:
-            _logger.info('AI 助手共合并 %d 个历史分叉库', merged)
+            _logger.info('CodeBuddy共合并 %d 个历史分叉库', merged)
         self._start_worker()
-        _logger.info('AI 助手引擎已初始化（归零版：纯多轮对话，会话级历史落库）')
+        _logger.info('CodeBuddy引擎已初始化（归零版：纯多轮对话，会话级历史落库）')
 
     # ---------- 历史落库（sqlite）----------
     def _init_db(self):
@@ -315,7 +315,7 @@ class AIChatManager:
                 'task_id TEXT)')
             self._db.commit()
         except Exception as e:
-            _logger.error('AI 助手历史库初始化失败: %s', e)
+            _logger.error('CodeBuddy历史库初始化失败: %s', e)
             self._db = None
 
     def _load_from_db(self):
@@ -349,7 +349,7 @@ class AIChatManager:
                         'id': mid, 'role': role, 'text': text,
                         'created_at': created_at, 'task_id': task_id})
         except Exception as e:
-            _logger.error('AI 助手历史载入失败: %s', e)
+            _logger.error('CodeBuddy历史载入失败: %s', e)
 
     def _insert_conv(self, cid, owner_id, title, created_at, updated_at):
         db = getattr(self, '_db', None)
@@ -364,7 +364,7 @@ class AIChatManager:
                     (cid, owner_id, title, created_at, updated_at))
                 db.commit()
         except Exception as e:
-            _logger.error('AI 助手会话写入失败: %s', e)
+            _logger.error('CodeBuddy会话写入失败: %s', e)
 
     def _append_db(self, cid, owner_id, role, text, created_at, task_id):
         db = getattr(self, '_db', None)
@@ -381,7 +381,7 @@ class AIChatManager:
                 mid = cur.lastrowid
             return mid
         except Exception as e:
-            _logger.error('AI 助手历史写入失败: %s', e)
+            _logger.error('CodeBuddy历史写入失败: %s', e)
             return None
 
     def _sync_stream_msg(self, cid, mid, text, created_at, task_id):
@@ -428,7 +428,7 @@ class AIChatManager:
                 self._sync_stream_msg(cid, mid, text, created_at, task_id)
             return mid
         except Exception as e:
-            _logger.error('AI 助手流式消息写入失败: %s', e)
+            _logger.error('CodeBuddy流式消息写入失败: %s', e)
             return None
 
     def _update_conv_time(self, cid, updated_at):
@@ -442,7 +442,7 @@ class AIChatManager:
                     (updated_at, cid))
                 db.commit()
         except Exception as e:
-            _logger.error('AI 助手会话时间更新失败: %s', e)
+            _logger.error('CodeBuddy会话时间更新失败: %s', e)
 
     def _db_delete_conv(self, cid):
         db = getattr(self, '_db', None)
@@ -454,7 +454,7 @@ class AIChatManager:
                 db.execute('DELETE FROM conversations WHERE id=?', (cid,))
                 db.commit()
         except Exception as e:
-            _logger.error('AI 助手会话删除失败: %s', e)
+            _logger.error('CodeBuddy会话删除失败: %s', e)
 
     def _db_clear_conv(self, cid):
         db = getattr(self, '_db', None)
@@ -465,7 +465,7 @@ class AIChatManager:
                 db.execute('DELETE FROM messages WHERE conversation_id=?', (cid,))
                 db.commit()
         except Exception as e:
-            _logger.error('AI 助手会话清空失败: %s', e)
+            _logger.error('CodeBuddy会话清空失败: %s', e)
 
     def _start_worker(self):
         if self._worker and self._worker.is_alive():

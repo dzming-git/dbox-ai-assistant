@@ -13,7 +13,7 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, '..', 'src', 'extensions_host'))
 
-import ai_assistant as ac
+import codebuddy as ac
 
 
 def test_strip_intent_hint_line():
@@ -36,7 +36,7 @@ def test_strip_continue_note_line():
 
 def test_strip_keeps_real_content():
     # 正常回复（含普通括号/方括号文本）不应被误删
-    out = '问题根因在 ai_assistant.py:918。请查看（系统文档）与【配置项】说明。'
+    out = '问题根因在 codebuddy.py:918。请查看（系统文档）与【配置项】说明。'
     assert ac._strip_control_lines(out) == out
 
 

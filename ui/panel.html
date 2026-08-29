@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>AI 助手</title>
+<title>CodeBuddy</title>
 <style>
   :root {
     --bg: #0f0f14;
@@ -159,7 +159,7 @@
 </head>
 <body>
   <div class="chat-header">
-    <span class="title">AI 助手</span>
+    <span class="title">CodeBuddy</span>
     <span class="spacer"></span>
     <select id="model"></select>
     <button id="clearBtn" title="清空当前会话">清空</button>
@@ -206,7 +206,7 @@ let currentConvId = null;    // 当前会话 id（持久化到 localStorage）
 // 由此面板不再写死插件 id，可复用于任意拓展。
 const EXT_KEY = '__EXT_KEY__';
 const API_PREFIX = '__EXT_API_PREFIX__';
-const CONV_KEY = 'ai_assistant_conv_' + EXT_KEY;
+const CONV_KEY = 'codebuddy_conv_' + EXT_KEY;
 
 // 宿主（ExtensionHost / ExtensionStandalone）通过 postMessage 下发 token
 let booted = false;
@@ -745,7 +745,7 @@ async function loadModels() {
       const o = document.createElement('option'); o.value = m.id; o.textContent = m.name; sel.appendChild(o);
     });
     if (!sel.options.length) { const o = document.createElement('option'); o.value = ''; o.textContent = '默认模型'; sel.appendChild(o); }
-    if (j.models && !j.models.length) setStatus('未获取到模型，请检查 AI 助手后端配置', true);
+    if (j.models && !j.models.length) setStatus('未获取到模型，请检查 CodeBuddy后端配置', true);
   } catch (e) {
     setStatus('加载模型失败：' + (e.message || e) + '（请确认已登录且扩展宿主 8093 运行中）', true);
   }

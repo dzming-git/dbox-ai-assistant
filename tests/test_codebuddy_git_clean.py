@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""AI 助手 git 仓库干净度核查（结构性保证）测试。
+"""CodeBuddy git 仓库干净度核查（结构性保证）测试。
 
 验证：处理前快照基线、处理后由进程客观比对工作树，对本次运行「新增」的脏文件
 告警，并对符合项目规范的临时文件（_commit_msg.txt / *.tmp 等）自动清理。
 
-运行：python tests/test_ai_assistant_git_clean.py
+运行：python tests/test_codebuddy_git_clean.py
 """
 import os
 import sys
@@ -17,7 +17,7 @@ _SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src', 'ext
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-import ai_assistant as m
+import codebuddy as m
 
 
 def _git(repo, *args):

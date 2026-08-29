@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""AI 助手回复构造（stdout 为空时回退采用 stderr 正文）测试。
+"""CodeBuddy回复构造（stdout 为空时回退采用 stderr 正文）测试。
 
 验证：buddy 在部分运行环境（非 TTY 管道）下把最终回复写到 stderr 而非 stdout，
 此前只读 stdout 导致正文被丢弃、频繁出现「（任务已执行完成，无文本输出）」。
 _build_reply 必须在 stdout 为空且退出码正常时回退采用 stderr 正文。
 
-运行：python tests/test_ai_assistant_reply.py
+运行：python tests/test_codebuddy_reply.py
 """
 import os
 import sys
@@ -15,7 +15,7 @@ _SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src', 'ext
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-import ai_assistant as m
+import codebuddy as m
 
 
 class BuildReplyTest(unittest.TestCase):

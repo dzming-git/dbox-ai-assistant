@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""AI 助手「停止/取消」运行中任务时，必须杀掉整个进程树，而非仅立即进程。
+"""CodeBuddy「停止/取消」运行中任务时，必须杀掉整个进程树，而非仅立即进程。
 
 回归点：此前 delete_task 对 running 任务调用 proc.kill() 只杀掉 buddy 启动进程，
 而真正的 AI 工作跑在孙进程（node）里并持有 stdout 管道 —— 孙进程不死、管道不关、
@@ -19,7 +19,7 @@ _SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src', 'ext
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-import ai_assistant as m
+import codebuddy as m
 
 
 class _FakeProc:

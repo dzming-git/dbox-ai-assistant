@@ -1,6 +1,6 @@
 {
-  "id": "ai_assistant",
-  "name": "AI 助手对话",
+  "id": "codebuddy",
+  "name": "CodeBuddy对话",
   "description": "右下角悬浮球，点击展开与 AI 的对话面板，经后端调用 CodeBuddy CLI 直接对话",
   "enabled": true,
   "api_version": 1,
@@ -8,13 +8,13 @@
   "interface": "ui",
   "ui": {
     "mount": "floating",
-    "title": "AI 助手",
+    "title": "CodeBuddy",
     "icon": "💬",
     "entry": "panel.html",
     "needs_credential": { "kind": "token", "domain": "codebuddy" },
     "sandbox": "allow-scripts allow-same-origin allow-forms allow-popups",
-    "standalone_route": "/ai-assistant",
-    "busy_poll": "/api/ext/ai_assistant/tasks"
+    "standalone_route": "/codebuddy",
+    "busy_poll": "/api/ext/codebuddy/tasks"
   },
   "settings": [
     {
@@ -86,7 +86,7 @@
   "backend": {
     "module": "backend.server",
     "factory": "create_blueprint",
-    "url_prefix": "/api/ext/ai_assistant",
+    "url_prefix": "/api/ext/codebuddy",
     "needs": ["codebuddy_token"],
     "main_service_url": "http://127.0.0.1:8080"
   }

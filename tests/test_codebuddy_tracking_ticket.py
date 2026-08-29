@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""验证 AI 助手自动建单的结构：标题=概括、内容=问题描述、留言=AI 处理动作。
+"""验证 CodeBuddy自动建单的结构：标题=概括、内容=问题描述、留言=AI 处理动作。
 
 此前自动跟踪单的标题是「AI 处理：<原始诉求首行>」、内容里混入了「AI 做了什么」，
 且完全没有留言。本测试确认：
@@ -18,7 +18,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, '..', 'src', 'extensions_host'))
 sys.path.insert(0, os.path.join(_HERE, '..', 'src', 'web', 'backend'))
 
-import ai_assistant as ac
+import codebuddy as ac
 import platform_client as pc
 
 
@@ -91,7 +91,7 @@ def test_tracking_ticket_writes_comment_to_db():
                                 comments=comments, status=status)
         issue_id = feedback_db.db_create_issue(
             title=title, content=content, category=ftype,
-            submitter='自动助手', source='ai_assistant', auto_classified=True,
+            submitter='自动助手', source='codebuddy', auto_classified=True,
             status=status, extra=extra, comment=comment, comments=comments)
         return issue_id
 

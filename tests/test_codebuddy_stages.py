@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""AI 助手「每个阶段一个气泡」测试。
+"""CodeBuddy「每个阶段一个气泡」测试。
 
 验证：宿主进程在 _process 管线各阶段向订阅者发射 phase 事件（开始 -> 结束，结束带一句
 conclusion），每个阶段对应聊天窗口里一个独立气泡；闲聊意图只产生「分析用户意图 + 生成回复」
@@ -8,7 +8,7 @@ conclusion），每个阶段对应聊天窗口里一个独立气泡；闲聊意�
 通过伪造 subprocess.Popen，使 _process 在不依赖真实 buddy CLI 的情况下
 跑通全链路，并断言 phase 事件的数量、顺序与 conclusion，以及存库的 phases / reply。
 
-运行：python tests/test_ai_assistant_stages.py
+运行：python tests/test_codebuddy_stages.py
 """
 import os
 import sys
@@ -23,7 +23,7 @@ _SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src', 'ext
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-import ai_assistant as m
+import codebuddy as m
 
 
 class IntentClassifyTest(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""AI 助手插件后端入口（归零版）。
+"""CodeBuddy插件后端入口（归零版）。
 
 只提供纯聊天所需的最小接口集：
 - POST '' / '/chat'          发送一条消息，返回 { task_id }（支持 conversation_id）
@@ -20,7 +20,7 @@ from .engine import ai_mgr, list_models
 
 
 def create_blueprint(host):
-    bp = Blueprint('ext_ai_assistant', __name__, url_prefix=host.url_prefix)
+    bp = Blueprint('ext_codebuddy', __name__, url_prefix=host.url_prefix)
 
     # init 失败时记录完整 traceback（而非只记 message），便于定位为何引擎未就绪；
     # 并把异常暂存到 bp._init_error，供各路由在调用 ai_mgr 前给出明确的 JSON 错误
@@ -29,8 +29,8 @@ def create_blueprint(host):
     try:
         ai_mgr.init(host)
     except Exception as e:
-        bp._init_error = 'AI 助手初始化失败: %s' % e
-        host.logger.exception('AI 助手初始化失败（引擎将不可用）')
+        bp._init_error = 'CodeBuddy初始化失败: %s' % e
+        host.logger.exception('CodeBuddy初始化失败（引擎将不可用）')
 
     def _engine_guard():
         """引擎未就绪时返回 JSON 错误响应，避免抛异常变成 HTML 500。"""
@@ -230,7 +230,7 @@ def g_user_id():
 
 
 def __ext_busy__():
-    """热重载保护钩子：AI 助手有正在跑/排队任务时返回 True。
+    """热重载保护钩子：CodeBuddy有正在跑/排队任务时返回 True。
 
     宿主热重载会在重新 import 本模块前征询此函数；返回 True 时宿主会
     延迟重载，避免正在生成的对话因 ai_mgr 单例被丢弃而断流。

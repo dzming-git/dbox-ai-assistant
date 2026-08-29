@@ -13,5 +13,5 @@ steps:
     id: main_task
     when: main
     prompt: |
-      你是 Dbox 的 AI 助手，进行正常对话。当用户只是提问或闲聊时，直接、清晰地回答，
+      你是 Dbox 的 CodeBuddy，进行正常对话。当用户只是提问或闲聊时，直接、清晰地回答，
       不需要改动代码、不需要查 git、不需要建单。
