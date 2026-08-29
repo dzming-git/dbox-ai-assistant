@@ -81,12 +81,21 @@
   .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
   .msg.user .meta { text-align: right; }
   .msg.user .bubble-wrap { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
-  .msg.assistant .bubble-wrap { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+  .msg.assistant .bubble-wrap {
+    display: flex; flex-direction: column; align-items: flex-start; min-width: 0;
+    /* 撑满剩余宽度：否则空气泡（仅“处理中”占位）会收缩到 min-width 而显得很窄，
+       直到思考内容流入才“跳”宽。撑满后宽度从第一条思考出现前就是稳定的。 */
+    flex: 1 1 auto;
+  }
   .msg.user .bubble { background: var(--user-bubble); border-color: transparent; }
-  .msg.assistant .bubble { background: var(--ai-bubble); min-width: 200px; }
-  /* 可折叠思考块：思考中完整展开显示；回答一开始自动收起（点击标题可回看）。
-     与回答块共用「一个思考区 + 一个回答区」：思考/回答交替进行时，二者各自持续累积，
-     思考区不会因回答开始而被永久隐藏——只是默认收起，展开即可回看全部思考过程。 */
+  .msg.assistant .bubble {
+    background: var(--ai-bubble); min-width: 200px;
+    /* 固定为可用宽度（仍受 max-width 约束），使思考出现前后宽度一致 */
+    width: 100%;
+  }
+  /* 可折叠思考块：思考/回答可多段交替出现（思考1 → 回答1 → 思考2 → 回答2 …）。
+     每段思考是独立区块，标题栏可点击折叠；该段思考结束后（下一段回答开始）自动收起，
+     但绝不删除——全部回答结束后仍可点开回看完整思考过程。 */
   .think {
     margin-bottom: 8px; border: 1px solid var(--border); border-radius: 8px;
     background: rgba(255,255,255,.03); overflow: hidden;
@@ -468,32 +477,37 @@ function lineHeightOf(el) {
   const lh = parseFloat(getComputedStyle(el).lineHeight);
   return isNaN(lh) ? 22 : lh;
 }
+// 对气泡内「每一个」回答片段分别做长文折叠（思考/回答多段交替时会有多个 .body）。
 function applyCollapse(bubble) {
-  let bodyEl = bubble.querySelector('.body');
-  // 兼容：气泡内容直接写在 bubble 内（无 .body 子元素，例如历史对话直接 innerHTML）时，
-  // 把现有子节点（含文本节点）统一包进 .body。必须用 childNodes（含文本节点），
-  // 不能用 children（仅元素节点）——纯长文本是文本节点，children.length 为 0 会导致漏折叠。
-  if (!bodyEl && bubble.childNodes.length) {
-    bodyEl = document.createElement('div');
-    bodyEl.className = 'body';
-    while (bubble.firstChild) bodyEl.appendChild(bubble.firstChild);
-    bubble.appendChild(bodyEl);
+  if (!bubble) return;
+  let bodies = Array.from(bubble.querySelectorAll('.body'));
+  // 兼容历史对话：内容直接写在 bubble 内（无 .body、无思考段）时，统一包进一个 .body。
+  // 必须用 childNodes（含文本节点），不能用 children——纯长文本是文本节点，
+  // children.length 为 0 会导致漏折叠。
+  if (!bodies.length && !bubble.querySelector('.think') && !bubble.querySelector('.expand-btn')
+      && bubble.childNodes.length) {
+    const w = document.createElement('div');
+    w.className = 'body';
+    while (bubble.firstChild) w.appendChild(bubble.firstChild);
+    bubble.appendChild(w);
+    bodies = [w];
   }
-  if (!bodyEl) return;
-  // 已折叠则跳过，避免重复添加“展开全文”按钮（面板显隐切换 / 历史重渲染会多次调用本函数）
+  bodies.forEach(b => collapseBody(b, bubble));
+}
+// 单个回答片段的折叠：超过 N 行默认收起，按钮紧跟该片段（多段各自独立展开/收起）
+function collapseBody(bodyEl, bubble) {
+  // 已折叠则跳过，避免重复添加“展开全文”按钮（面板显隐切换 / 历史重渲染会多次调用）
   if (bodyEl.classList.contains('collapsible')) return;
   const lh = lineHeightOf(bodyEl);
   if (bodyEl.scrollHeight <= lh * COLLAPSE_LINES) return;
   bodyEl.classList.add('collapsible', 'collapsed');
   bodyEl.style.maxHeight = (lh * COLLAPSE_LINES) + 'px';
-  if (!bubble.querySelector('.expand-btn')) {
-    const btn = document.createElement('span');
-    btn.className = 'expand-btn';
-    btn.textContent = '展开全文 ▾';
-    btn.onclick = () => toggleCollapse(bodyEl, btn, bubble);
-    // 放到气泡内（与折叠内容平级，不被 overflow 裁剪）；展开/收起时按钮始终在文本下方
-    bubble.appendChild(btn);
-  }
+  const btn = document.createElement('span');
+  btn.className = 'expand-btn';
+  btn.textContent = '展开全文 ▾';
+  btn.onclick = () => toggleCollapse(bodyEl, btn, bubble);
+  // 按钮紧跟在被折叠的片段之后（与折叠内容平级，不被 overflow 裁剪）
+  bodyEl.insertAdjacentElement('afterend', btn);
 }
 // 展开/收起时，用按钮前后屏幕位置差修正滚动，把按钮钉在原视觉位置，避免阅读位置跳动
 function toggleCollapse(bodyEl, btn, bubble) {
@@ -512,9 +526,9 @@ function toggleCollapse(bodyEl, btn, bubble) {
   m.scrollTop += (after - before);
 }
 
-// 构建一条助手消息的容器：可折叠「思考块」+「回答块」+「处理中」占位。
-// 思考与回答共用「一个思考区 + 一个回答区」：CodeBuddy 思考/回答交替进行时，两个区各自持续累积，
-// 不再拆成多个交替出现的块。phase 状态机控制思考区的自动展开/收起（用户手动收起后保持）。
+// 构建一条助手消息容器：思考与回答按「多段交替」渲染（思考1 → 回答1 → 思考2 → 回答2 …）。
+// 每当思考/回答类型切换就新开一个独立片段（思考 → 回答后再思考，会新开辟第二个思考区）；
+// 思考片段在其后的回答开始时自动收起，但绝不删除——全部回答结束后仍可点标题回看完整思考过程。
 // 返回流式渲染所需的引用与方法，send() 与 resumeRunningTask() 共用，避免重复实现。
 function newAssistantBubble() {
   const empty = document.getElementById('empty'); if (empty) empty.remove();
@@ -525,84 +539,109 @@ function newAssistantBubble() {
   bubbleWrap.appendChild(bubble); wrap.appendChild(av); wrap.appendChild(bubbleWrap);
   document.getElementById('messages').appendChild(wrap); scrollBottom();
 
-  // 思考块：标题栏可点击折叠；思考中显示「思考中…」，回答开始后折叠成「思考过程」
-  const thinkWrap = document.createElement('div'); thinkWrap.className = 'think';
-  const thinkHd = document.createElement('div'); thinkHd.className = 'think-hd';
-  thinkHd.innerHTML = '<span class="caret">▾</span><span class="label">💭 思考中…</span>';
-  const thinkBody = document.createElement('div'); thinkBody.className = 'think-body';
-  thinkWrap.appendChild(thinkHd); thinkWrap.appendChild(thinkBody);
-  // 回答块
-  const bodyEl = document.createElement('div'); bodyEl.className = 'body';
-  // 处理中占位
+  // 处理中占位：始终留在气泡末尾，新片段插在它之前，保证时间顺序正确
   const pendingEl = document.createElement('div'); pendingEl.className = 'pending';
   pendingEl.innerHTML = '<span class="spinner"></span> AI 正在思考…';
-  bubble.appendChild(thinkWrap); bubble.appendChild(bodyEl); bubble.appendChild(pendingEl);
+  bubble.appendChild(pendingEl);
 
-  // phase: 'thinking' | 'answering'；userToggled: 用户是否手动折叠过思考区
-  const state = { thinkingBuf: '', bodyBuf: '', phase: 'thinking', userToggled: false, pendingCleared: false };
-
-  // 点击标题：有内容时可折叠/展开切换；标记为用户手动操作，后续自动展开/收起不再覆盖
-  thinkHd.addEventListener('click', () => {
-    if (!state.thinkingBuf.trim()) return;
-    state.userToggled = true;
-    const isC = thinkWrap.classList.toggle('collapsed');
-    const caret = thinkHd.querySelector('.caret'); if (caret) caret.textContent = isC ? '▸' : '▾';
-  });
+  const state = { segs: [], cur: null, pendingCleared: false };
 
   function clearPending() {
     if (state.pendingCleared) return; state.pendingCleared = true;
-    const p = bubble.querySelector('.pending'); if (p) p.remove();
+    if (pendingEl.parentNode) pendingEl.remove();
   }
-  // 同步思考区折叠状态：思考阶段展开、回答阶段收起（除非用户手动设置过）
-  function syncThink() {
-    if (!state.thinkingBuf.trim()) { thinkWrap.style.display = 'none'; return; }
-    thinkWrap.style.display = '';
-    const label = thinkHd.querySelector('.label'); if (label) label.textContent = state.phase === 'thinking' ? '💭 思考中…' : '💭 思考过程';
-    const caret = thinkHd.querySelector('.caret'); if (caret) caret.textContent = '▾';
-    if (state.userToggled) return;  // 尊重用户手动选择
-    const wantCollapsed = (state.phase === 'answering');
-    if (wantCollapsed !== thinkWrap.classList.contains('collapsed')) {
-      thinkWrap.classList.toggle('collapsed', wantCollapsed);
-      if (caret) caret.textContent = wantCollapsed ? '▸' : '▾';
+
+  // 新建片段：type = 'think' | 'answer'
+  function newSeg(type) {
+    const seg = { type, buf: '', done: false, userToggled: false };
+    if (type === 'think') {
+      const w = document.createElement('div'); w.className = 'think';
+      const hd = document.createElement('div'); hd.className = 'think-hd';
+      hd.innerHTML = '<span class="caret">▾</span><span class="label">💭 思考中…</span>';
+      const bd = document.createElement('div'); bd.className = 'think-body';
+      w.appendChild(hd); w.appendChild(bd);
+      // 点击标题折叠/展开；手动操作过的片段，后续自动收起不再覆盖
+      hd.addEventListener('click', () => {
+        if (!seg.buf.trim()) return;
+        seg.userToggled = true;
+        const isC = w.classList.toggle('collapsed');
+        const caret = hd.querySelector('.caret'); if (caret) caret.textContent = isC ? '▸' : '▾';
+      });
+      seg.el = w; seg.bodyEl = bd; seg.hd = hd;
+    } else {
+      const bd = document.createElement('div'); bd.className = 'body';
+      seg.el = bd; seg.bodyEl = bd;
     }
+    // 占位仍在气泡内时插到它之前（保持时间顺序）；占位已被 clearPending 移除则直接追加
+    if (pendingEl.parentNode === bubble) bubble.insertBefore(seg.el, pendingEl);
+    else bubble.appendChild(seg.el);
+    state.segs.push(seg);
+    state.cur = seg;
+    return seg;
   }
+
+  // 收尾所有未结束的思考段：标题改「思考过程」并默认收起（保留、可点开回看，不删除）；
+  // 用户手动操作过的段保持其选择。
+  function closePrevThink() {
+    state.segs.forEach(s => {
+      if (s.type !== 'think' || s.done) return;
+      s.done = true;
+      const label = s.hd && s.hd.querySelector('.label');
+      if (label) label.textContent = '💭 思考过程';
+      if (!s.userToggled) {
+        s.el.classList.add('collapsed');
+        const caret = s.hd && s.hd.querySelector('.caret');
+        if (caret) caret.textContent = '▸';
+      }
+    });
+  }
+
+  // 保证当前片段是指定类型；类型切换时先收尾思考段再新开一段
+  function ensureSeg(type) {
+    if (state.cur && state.cur.type === type) return state.cur;
+    closePrevThink();
+    return newSeg(type);
+  }
+
   function appendThinking(chunk) {
     clearPending();
-    state.phase = 'thinking';
-    state.thinkingBuf += chunk;
-    thinkBody.innerHTML = renderMarkdown(state.thinkingBuf);
-    syncThink();
+    const seg = ensureSeg('think');
+    seg.buf += chunk;
+    seg.bodyEl.innerHTML = renderMarkdown(seg.buf);
     scrollBottom();
   }
   function appendAnswer(chunk) {
     clearPending();
-    state.phase = 'answering';
-    state.bodyBuf += chunk;
-    bodyEl.innerHTML = renderMarkdown(state.bodyBuf);
-    syncThink();
+    const seg = ensureSeg('answer');
+    seg.buf += chunk;
+    seg.bodyEl.innerHTML = renderMarkdown(seg.buf);
     scrollBottom();
   }
   function setAnswer(full) {
     clearPending();
-    state.phase = 'answering';
-    state.bodyBuf = full;
-    bodyEl.innerHTML = renderMarkdown(full);
-    syncThink();
+    const seg = ensureSeg('answer');
+    seg.buf = full;
+    seg.bodyEl.innerHTML = renderMarkdown(full);
     scrollBottom();
   }
-  // 完成时收尾：兜底空回复、回到回答阶段（思考区默认收起）、长回答折叠
+  // 完成时收尾：兜底空回复、思考段保留（默认收起可回看）、长回答折叠
   function finalize() {
     clearPending();
-    state.phase = 'answering';
-    if (!state.pendingCleared) {
-      bodyEl.innerHTML = '<span style="color:var(--muted)">（没有收到回复）</span>';
-      const p = bubble.querySelector('.pending'); if (p) p.remove();
+    closePrevThink();     // 思考段不会被删除，只是默认收起
+    const hasAnswer = state.segs.some(s => s.type === 'answer' && s.buf.trim());
+    if (!hasAnswer) {
+      const seg = ensureSeg('answer');
+      seg.bodyEl.innerHTML = '<span style="color:var(--muted)">（没有收到回复）</span>';
     }
-    syncThink();
     bubble.dataset.done = '1';   // 标记已完成，允许在面板可见时补折叠
     applyCollapse(bubble);
   }
-  return { bubble, bodyEl, clearPending, appendThinking, appendAnswer, setAnswer, finalize };
+
+  // 错误提示等直接写入回答区；bodyEl 用 getter 惰性保证存在回答段
+  return {
+    bubble, clearPending, appendThinking, appendAnswer, setAnswer, finalize,
+    get bodyEl() { return ensureSeg('answer').bodyEl; }
+  };
 }
 
 // ---------- 会话管理 ----------
@@ -729,7 +768,7 @@ async function send() {
       body: JSON.stringify({ message: text, model: document.getElementById('model').value,
         conversation_id: currentConvId || '' }) });
     const j = await r.json();
-    if (!j.success) { ab.bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(j.message || '') + '</span>'; setStatus('发送失败：' + (j.message || ''), true); return; }
+    if (!j.success) { ab.clearPending(); ab.bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(j.message || '') + '</span>'; setStatus('发送失败：' + (j.message || ''), true); return; }
     currentTask = j.task_id;
     // 若服务端新建/命中了某个会话（首条消息自动建会话），同步到当前会话并持久化
     if (j.conversation_id && j.conversation_id !== currentConvId) {
@@ -738,6 +777,7 @@ async function send() {
     }
     setRunning(true);
   } catch (e) {
+    ab.clearPending();
     ab.bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(e.message || '') + '</span>';
     setStatus('发送请求失败：' + (e.message || e) + '（请确认已登录且扩展宿主 8093 运行中）', true);
     return;
