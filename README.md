@@ -6,7 +6,7 @@ DBox 平台的 **CodeBuddy** 扩展插件（纯插件，解压即用，对框架
 > 相关路径 / 路由 / 数据库表名等均已随之更新：
 > - 插件 id：`codebuddy`
 > - 后端路由前缀：`/api/ext/codebuddy`
-> - 独立全屏路由：`/codebuddy`（由宿主框架按 manifest 的 `ui.standalone_route` 动态注册）
+> - 独立全屏路由：`/ext/codebuddy`（由宿主框架按插件 id 自动推导，manifest 无需声明）
 > - 任务表 kind：`codebuddy`
 
 ## 目录结构
@@ -53,10 +53,10 @@ DBox 平台的 **CodeBuddy** 扩展插件（纯插件，解压即用，对框架
 3. 框架会自动：
    - 扫描 `extensions/codebuddy/manifest.json`
    - 加载 `backend/server.py` 的 `create_blueprint(host)`，挂载 `/api/ext/codebuddy/*`
-   - 按 `ui.standalone_route` 动态注册 `/codebuddy` 全屏路由
+   - 按插件 id 自动推导并动态注册 `/ext/codebuddy` 全屏路由
    - 在右下角挂悬浮球（按 `ui.mount: floating`）
 
-4. 打开前端（`http://<host>:5173/`）即可看到悬浮球；点开或用 `/codebuddy` 进入全屏对话。
+4. 打开前端（`http://<host>:5173/`）即可看到悬浮球；点开或用 `/ext/codebuddy` 进入全屏对话。
 
 ## 卸载
 

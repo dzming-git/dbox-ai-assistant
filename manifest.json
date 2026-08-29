@@ -13,7 +13,6 @@
     "entry": "panel.html",
     "needs_credential": { "kind": "token", "domain": "codebuddy" },
     "sandbox": "allow-scripts allow-same-origin allow-forms allow-popups",
-    "standalone_route": "/codebuddy",
     "busy_poll": "/api/ext/codebuddy/tasks"
   },
   "settings": [
