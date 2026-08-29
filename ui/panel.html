@@ -76,7 +76,7 @@
     padding: 10px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word;
     overflow-wrap: anywhere; min-width: 0;
     background: var(--ai-bubble); border: 1px solid var(--border); overflow-x: auto;
-    max-width: min(78%, 640px);
+    max-width: min(88%, 720px);
   }
   .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
   .msg.user .meta { text-align: right; }
@@ -186,6 +186,21 @@
   .modal button:hover { color: var(--text); border-color: var(--accent-2); }
   .modal button.danger { color: var(--danger); border-color: var(--danger); }
   .modal button.danger:hover { background: rgba(255,107,107,.12); color: var(--danger); }
+  /* 移动端窄屏：小窗 + 屏宽本就窄，气泡需占更宽比例，否则几个字就换行 */
+  @media (max-width: 480px) {
+    .messages { padding: 12px 10px; gap: 10px; }
+    .msg { gap: 6px; }
+    .msg .avatar { width: 24px; height: 24px; font-size: 12px; border-radius: 6px; }
+    .bubble {
+      max-width: 94%;
+      padding: 9px 10px;
+      font-size: 13.5px;
+      line-height: 1.55;
+    }
+    .msg.assistant .bubble { min-width: 0; }
+    .chat-header { padding: 8px 10px; }
+    .conv-bar { padding: 6px 10px; }
+  }
 </style>
 </head>
 <body>
