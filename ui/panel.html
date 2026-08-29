@@ -83,9 +83,10 @@
   .msg.user .bubble-wrap { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
   .msg.assistant .bubble-wrap { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
   .msg.user .bubble { background: var(--user-bubble); border-color: transparent; }
-  .msg.assistant .bubble { background: var(--ai-bubble); min-width: 160px; }
+  .msg.assistant .bubble { background: var(--ai-bubble); min-width: 200px; }
   /* 可折叠思考块：思考中完整展开显示；回答一开始自动收起（点击标题可回看）。
-     每条助手消息独立一个，多条消息的思考/回答自然交叉出现。 */
+     与回答块共用「一个思考区 + 一个回答区」：思考/回答交替进行时，二者各自持续累积，
+     思考区不会因回答开始而被永久隐藏——只是默认收起，展开即可回看全部思考过程。 */
   .think {
     margin-bottom: 8px; border: 1px solid var(--border); border-radius: 8px;
     background: rgba(255,255,255,.03); overflow: hidden;
@@ -99,6 +100,7 @@
   .think-body {
     padding: 0 10px 8px; color: var(--muted); font-style: italic; font-size: 12.5px;
     white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+    max-height: 220px; overflow-y: auto;
   }
   .think.collapsed .think-body { display: none; }
   .bubble pre {
@@ -197,7 +199,7 @@
       font-size: 13.5px;
       line-height: 1.55;
     }
-    .msg.assistant .bubble { min-width: 120px; }
+    .msg.assistant .bubble { min-width: 85%; }
     .chat-header { padding: 8px 10px; }
     .conv-bar { padding: 6px 10px; }
   }
@@ -511,6 +513,8 @@ function toggleCollapse(bodyEl, btn, bubble) {
 }
 
 // 构建一条助手消息的容器：可折叠「思考块」+「回答块」+「处理中」占位。
+// 思考与回答共用「一个思考区 + 一个回答区」：CodeBuddy 思考/回答交替进行时，两个区各自持续累积，
+// 不再拆成多个交替出现的块。phase 状态机控制思考区的自动展开/收起（用户手动收起后保持）。
 // 返回流式渲染所需的引用与方法，send() 与 resumeRunningTask() 共用，避免重复实现。
 function newAssistantBubble() {
   const empty = document.getElementById('empty'); if (empty) empty.remove();
@@ -534,11 +538,13 @@ function newAssistantBubble() {
   pendingEl.innerHTML = '<span class="spinner"></span> AI 正在思考…';
   bubble.appendChild(thinkWrap); bubble.appendChild(bodyEl); bubble.appendChild(pendingEl);
 
-  const state = { thinkingBuf: '', bodyBuf: '', collapsed: false, pendingCleared: false };
+  // phase: 'thinking' | 'answering'；userToggled: 用户是否手动折叠过思考区
+  const state = { thinkingBuf: '', bodyBuf: '', phase: 'thinking', userToggled: false, pendingCleared: false };
 
-  // 点击标题：有内容时折叠/展开切换（已收起时无意义）
+  // 点击标题：有内容时可折叠/展开切换；标记为用户手动操作，后续自动展开/收起不再覆盖
   thinkHd.addEventListener('click', () => {
     if (!state.thinkingBuf.trim()) return;
+    state.userToggled = true;
     const isC = thinkWrap.classList.toggle('collapsed');
     const caret = thinkHd.querySelector('.caret'); if (caret) caret.textContent = isC ? '▸' : '▾';
   });
@@ -547,44 +553,56 @@ function newAssistantBubble() {
     if (state.pendingCleared) return; state.pendingCleared = true;
     const p = bubble.querySelector('.pending'); if (p) p.remove();
   }
+  // 同步思考区折叠状态：思考阶段展开、回答阶段收起（除非用户手动设置过）
+  function syncThink() {
+    if (!state.thinkingBuf.trim()) { thinkWrap.style.display = 'none'; return; }
+    thinkWrap.style.display = '';
+    const label = thinkHd.querySelector('.label'); if (label) label.textContent = state.phase === 'thinking' ? '💭 思考中…' : '💭 思考过程';
+    const caret = thinkHd.querySelector('.caret'); if (caret) caret.textContent = '▾';
+    if (state.userToggled) return;  // 尊重用户手动选择
+    const wantCollapsed = (state.phase === 'answering');
+    if (wantCollapsed !== thinkWrap.classList.contains('collapsed')) {
+      thinkWrap.classList.toggle('collapsed', wantCollapsed);
+      if (caret) caret.textContent = wantCollapsed ? '▸' : '▾';
+    }
+  }
   function appendThinking(chunk) {
     clearPending();
+    state.phase = 'thinking';
     state.thinkingBuf += chunk;
     thinkBody.innerHTML = renderMarkdown(state.thinkingBuf);
+    syncThink();
     scrollBottom();
   }
   function appendAnswer(chunk) {
     clearPending();
+    state.phase = 'answering';
     state.bodyBuf += chunk;
     bodyEl.innerHTML = renderMarkdown(state.bodyBuf);
+    syncThink();
     scrollBottom();
   }
   function setAnswer(full) {
     clearPending();
+    state.phase = 'answering';
     state.bodyBuf = full;
     bodyEl.innerHTML = renderMarkdown(full);
+    syncThink();
     scrollBottom();
   }
-  // 回答开始时收起思考块；无思考内容则直接隐藏，避免空块
-  function collapseThink() {
-    if (state.collapsed) return; state.collapsed = true;
-    if (!state.thinkingBuf.trim()) { thinkWrap.style.display = 'none'; return; }
-    thinkWrap.classList.add('collapsed');
-    const label = thinkHd.querySelector('.label'); if (label) label.textContent = '💭 思考过程';
-    const caret = thinkHd.querySelector('.caret'); if (caret) caret.textContent = '▸';
-  }
-  // 完成时收尾：兜底空回复、收起思考、长回答折叠
+  // 完成时收尾：兜底空回复、回到回答阶段（思考区默认收起）、长回答折叠
   function finalize() {
     clearPending();
+    state.phase = 'answering';
     if (!state.pendingCleared) {
       bodyEl.innerHTML = '<span style="color:var(--muted)">（没有收到回复）</span>';
       const p = bubble.querySelector('.pending'); if (p) p.remove();
     }
-    collapseThink();
+    syncThink();
     bubble.dataset.done = '1';   // 标记已完成，允许在面板可见时补折叠
     applyCollapse(bubble);
   }
-  return { bubble, bodyEl, clearPending, appendThinking, appendAnswer, setAnswer, collapseThink, finalize };
+  return { bubble, bodyEl, clearPending, appendThinking, appendAnswer, setAnswer, finalize };
 }
 
 // ---------- 会话管理 ----------
@@ -731,14 +749,12 @@ async function send() {
     + '&token=' + encodeURIComponent(getAuthToken()));
   es.addEventListener('token', (e) => {
     ab.appendAnswer(e.data);
-    ab.collapseThink();   // 回答一开始即自动收起思考块
   });
   es.addEventListener('thinking', (e) => {
     ab.appendThinking(e.data);
   });
   es.addEventListener('assistant', (e) => {
     ab.setAnswer(e.data);
-    ab.collapseThink();
   });
   es.addEventListener('error', (e) => {
     ab.clearPending();
@@ -788,14 +804,12 @@ function resumeRunningTask(taskId) {
     + '&token=' + encodeURIComponent(getAuthToken()));
   es.addEventListener('token', (e) => {
     ab.appendAnswer(e.data);
-    ab.collapseThink();   // 回答一开始即自动收起思考块
   });
   es.addEventListener('thinking', (e) => {
     ab.appendThinking(e.data);
   });
   es.addEventListener('assistant', (e) => {
     ab.setAnswer(e.data);
-    ab.collapseThink();
   });
   es.addEventListener('error', (e) => {
     ab.clearPending();
