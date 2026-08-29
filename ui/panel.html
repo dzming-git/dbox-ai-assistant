@@ -84,10 +84,23 @@
   .msg.assistant .bubble-wrap { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
   .msg.user .bubble { background: var(--user-bubble); border-color: transparent; }
   .msg.assistant .bubble { background: var(--ai-bubble); }
-  .bubble .thinking {
-    color: var(--muted); font-style: italic; border-left: 2px solid var(--accent-2);
-    padding-left: 8px; margin-bottom: 8px; font-size: 12.5px;
+  /* 可折叠思考块：思考中完整展开显示；回答一开始自动收起（点击标题可回看）。
+     每条助手消息独立一个，多条消息的思考/回答自然交叉出现。 */
+  .think {
+    margin-bottom: 8px; border: 1px solid var(--border); border-radius: 8px;
+    background: rgba(255,255,255,.03); overflow: hidden;
   }
+  .think-hd {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px; cursor: pointer;
+    color: var(--muted); font-size: 12.5px; user-select: none;
+  }
+  .think-hd:hover { color: var(--text); }
+  .think-hd .caret { font-size: 10px; width: 10px; text-align: center; }
+  .think-body {
+    padding: 0 10px 8px; color: var(--muted); font-style: italic; font-size: 12.5px;
+    white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+  }
+  .think.collapsed .think-body { display: none; }
   .bubble pre {
     background: #0c0c12; border: 1px solid var(--border); border-radius: 8px;
     padding: 10px; overflow-x: auto; margin: 8px 0;
@@ -186,8 +199,6 @@ let currentTask = null;     // 进行中的 task_id
 let runningTaskIds = new Set();
 let runningTaskConv = {};   // task_id -> conversation_id
 let currentConvId = null;    // 当前会话 id（持久化到 localStorage）
-let thinkingBuf = '';       // 当前助手消息的思考累积
-let bodyBuf = '';           // 当前助手消息正文累积
 
 // 框架注入的真实地址占位符（routes.py 在返回面板时替换为运行期真实值）：
 //   __EXT_KEY__        -> 拓展 key（=文件夹名），用于 token 握手 extId
@@ -402,6 +413,82 @@ function toggleCollapse(bodyEl, btn, bubble) {
   m.scrollTop += (after - before);
 }
 
+// 构建一条助手消息的容器：可折叠「思考块」+「回答块」+「处理中」占位。
+// 返回流式渲染所需的引用与方法，send() 与 resumeRunningTask() 共用，避免重复实现。
+function newAssistantBubble() {
+  const empty = document.getElementById('empty'); if (empty) empty.remove();
+  const wrap = document.createElement('div'); wrap.className = 'msg assistant';
+  const av = document.createElement('div'); av.className = 'avatar'; av.textContent = 'AI';
+  const bubbleWrap = document.createElement('div'); bubbleWrap.className = 'bubble-wrap';
+  const bubble = document.createElement('div'); bubble.className = 'bubble';
+  bubbleWrap.appendChild(bubble); wrap.appendChild(av); wrap.appendChild(bubbleWrap);
+  document.getElementById('messages').appendChild(wrap); scrollBottom();
+
+  // 思考块：标题栏可点击折叠；思考中显示「思考中…」，回答开始后折叠成「思考过程」
+  const thinkWrap = document.createElement('div'); thinkWrap.className = 'think';
+  const thinkHd = document.createElement('div'); thinkHd.className = 'think-hd';
+  thinkHd.innerHTML = '<span class="caret">▾</span><span class="label">💭 思考中…</span>';
+  const thinkBody = document.createElement('div'); thinkBody.className = 'think-body';
+  thinkWrap.appendChild(thinkHd); thinkWrap.appendChild(thinkBody);
+  // 回答块
+  const bodyEl = document.createElement('div'); bodyEl.className = 'body';
+  // 处理中占位
+  const pendingEl = document.createElement('div'); pendingEl.className = 'pending';
+  pendingEl.innerHTML = '<span class="spinner"></span> AI 正在思考…';
+  bubble.appendChild(thinkWrap); bubble.appendChild(bodyEl); bubble.appendChild(pendingEl);
+
+  const state = { thinkingBuf: '', bodyBuf: '', collapsed: false, pendingCleared: false };
+
+  // 点击标题：有内容时折叠/展开切换（已收起时无意义）
+  thinkHd.addEventListener('click', () => {
+    if (!state.thinkingBuf.trim()) return;
+    const isC = thinkWrap.classList.toggle('collapsed');
+    const caret = thinkHd.querySelector('.caret'); if (caret) caret.textContent = isC ? '▸' : '▾';
+  });
+
+  function clearPending() {
+    if (state.pendingCleared) return; state.pendingCleared = true;
+    const p = bubble.querySelector('.pending'); if (p) p.remove();
+  }
+  function appendThinking(chunk) {
+    clearPending();
+    state.thinkingBuf += chunk;
+    thinkBody.innerHTML = renderMarkdown(state.thinkingBuf);
+    scrollBottom();
+  }
+  function appendAnswer(chunk) {
+    clearPending();
+    state.bodyBuf += chunk;
+    bodyEl.innerHTML = renderMarkdown(state.bodyBuf);
+    scrollBottom();
+  }
+  function setAnswer(full) {
+    clearPending();
+    state.bodyBuf = full;
+    bodyEl.innerHTML = renderMarkdown(full);
+    scrollBottom();
+  }
+  // 回答开始时收起思考块；无思考内容则直接隐藏，避免空块
+  function collapseThink() {
+    if (state.collapsed) return; state.collapsed = true;
+    if (!state.thinkingBuf.trim()) { thinkWrap.style.display = 'none'; return; }
+    thinkWrap.classList.add('collapsed');
+    const label = thinkHd.querySelector('.label'); if (label) label.textContent = '💭 思考过程';
+    const caret = thinkHd.querySelector('.caret'); if (caret) caret.textContent = '▸';
+  }
+  // 完成时收尾：兜底空回复、收起思考、长回答折叠
+  function finalize() {
+    clearPending();
+    if (!state.pendingCleared) {
+      bodyEl.innerHTML = '<span style="color:var(--muted)">（没有收到回复）</span>';
+      const p = bubble.querySelector('.pending'); if (p) p.remove();
+    }
+    collapseThink();
+    applyCollapse(bubble);
+  }
+  return { bubble, bodyEl, clearPending, appendThinking, appendAnswer, setAnswer, collapseThink, finalize };
+}
+
 // ---------- 会话管理 ----------
 function saveCurrentConv() {
   try { localStorage.setItem(CONV_KEY, currentConvId || ''); } catch (_) {}
@@ -518,26 +605,14 @@ async function send() {
   ta.value = ''; ta.style.height = 'auto';
   const { bubble } = addMsg('user', text); bubble.innerHTML = renderMarkdown(text);
 
-  const { bubble: ab } = addMsg('assistant');
-  thinkingBuf = ''; bodyBuf = '';
-  let pendingCleared = false;
-  const thinkingEl = document.createElement('div'); thinkingEl.className = 'thinking';
-  const bodyEl = document.createElement('div'); bodyEl.className = 'body';
-  const pendingEl = document.createElement('div'); pendingEl.className = 'pending';
-  pendingEl.innerHTML = '<span class="spinner"></span> AI 正在思考…';
-  ab.appendChild(thinkingEl); ab.appendChild(bodyEl); ab.appendChild(pendingEl);
-  // 首个真实内容（思考/回复 token）到达即移除“思考中”占位，避免空气泡
-  function clearPending() {
-    if (pendingCleared) return; pendingCleared = true;
-    const p = ab.querySelector('.pending'); if (p) p.remove();
-  }
+  const ab = newAssistantBubble();
 
   try {
     const r = await api(API_PREFIX + 'chat', { method: 'POST',
       body: JSON.stringify({ message: text, model: document.getElementById('model').value,
         conversation_id: currentConvId || '' }) });
     const j = await r.json();
-    if (!j.success) { bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(j.message || '') + '</span>'; setStatus('发送失败：' + (j.message || ''), true); return; }
+    if (!j.success) { ab.bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(j.message || '') + '</span>'; setStatus('发送失败：' + (j.message || ''), true); return; }
     currentTask = j.task_id;
     // 若服务端新建/命中了某个会话（首条消息自动建会话），同步到当前会话并持久化
     if (j.conversation_id && j.conversation_id !== currentConvId) {
@@ -546,7 +621,7 @@ async function send() {
     }
     setRunning(true);
   } catch (e) {
-    bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(e.message || '') + '</span>';
+    ab.bodyEl.innerHTML = '<span style="color:var(--danger)">发送失败：' + esc(e.message || '') + '</span>';
     setStatus('发送请求失败：' + (e.message || e) + '（请确认已登录且扩展宿主 8093 运行中）', true);
     return;
   }
@@ -556,36 +631,29 @@ async function send() {
   const es = new EventSource(API_PREFIX + 'stream?task_id=' + encodeURIComponent(currentTask)
     + '&token=' + encodeURIComponent(getAuthToken()));
   es.addEventListener('token', (e) => {
-    clearPending();
-    bodyBuf += e.data; bodyEl.innerHTML = renderMarkdown(bodyBuf); scrollBottom();
+    ab.appendAnswer(e.data);
+    ab.collapseThink();   // 回答一开始即自动收起思考块
   });
   es.addEventListener('thinking', (e) => {
-    clearPending();
-    thinkingBuf += e.data; thinkingEl.textContent = thinkingBuf; scrollBottom();
+    ab.appendThinking(e.data);
   });
   es.addEventListener('assistant', (e) => {
-    clearPending();
-    bodyBuf = e.data; bodyEl.innerHTML = renderMarkdown(bodyBuf); scrollBottom();
+    ab.setAnswer(e.data);
+    ab.collapseThink();
   });
   es.addEventListener('error', (e) => {
-    clearPending();
-    bodyEl.innerHTML += '<div style="color:var(--danger)">错误：' + esc(e.data) + '</div>';
+    ab.clearPending();
+    ab.bodyEl.innerHTML += '<div style="color:var(--danger)">错误：' + esc(e.data) + '</div>';
   });
   // SSE 连接层中断（非业务 error 事件）：给出明确提示，避免占位永久旋转
   es.onerror = () => {
-    clearPending();
-    bodyEl.innerHTML += '<div style="color:var(--danger)">连接中断，请重试</div>';
+    ab.clearPending();
+    ab.bodyEl.innerHTML += '<div style="color:var(--danger)">连接中断，请重试</div>';
     setRunning(false); currentTask = null;
   };
-  es.addEventListener('done', (e) => {
+  es.addEventListener('done', () => {
     es.close();
-    thinkingEl.remove();
-    // 整段无任何内容（thinking/body 皆空）时兜底，绝不留下空白气泡
-    if (!pendingCleared) {
-      bodyEl.innerHTML = '<span style="color:var(--muted)">（没有收到回复）</span>';
-      const p = ab.querySelector('.pending'); if (p) p.remove();
-    }
-    applyCollapse(ab); // 长回答完成后再判定是否折叠
+    ab.finalize();        // 兜底空回复 + 收起思考 + 长回答折叠
     currentTask = null; setRunning(false);
     document.getElementById('status').textContent = '';
     // 会话标题/preview 可能已更新，刷新会话列表（不重渲染当前消息）
@@ -615,50 +683,33 @@ async function fetchRunningTasks() {
 function resumeRunningTask(taskId) {
   if (currentTask) return;   // 已有进行中的订阅则不重复
   currentTask = taskId;
-  const { bubble: ab } = addMsg('assistant');
-  const thinkingEl = document.createElement('div'); thinkingEl.className = 'thinking';
-  const bodyEl = document.createElement('div'); bodyEl.className = 'body';
-  const pendingEl = document.createElement('div'); pendingEl.className = 'pending';
-  pendingEl.innerHTML = '<span class="spinner"></span> AI 正在思考…';
-  ab.appendChild(thinkingEl); ab.appendChild(bodyEl); ab.appendChild(pendingEl);
-  let pendingCleared = false;
-  function clearPending() {
-    if (pendingCleared) return; pendingCleared = true;
-    const p = ab.querySelector('.pending'); if (p) p.remove();
-  }
+  const ab = newAssistantBubble();
   setRunning(true);
-  let bodyBuf = '', thinkingBuf = '';
   const es = new EventSource(API_PREFIX + 'stream?task_id=' + encodeURIComponent(taskId)
     + '&token=' + encodeURIComponent(getAuthToken()));
   es.addEventListener('token', (e) => {
-    clearPending();
-    bodyBuf += e.data; bodyEl.innerHTML = renderMarkdown(bodyBuf); scrollBottom();
+    ab.appendAnswer(e.data);
+    ab.collapseThink();   // 回答一开始即自动收起思考块
   });
   es.addEventListener('thinking', (e) => {
-    clearPending();
-    thinkingBuf += e.data; thinkingEl.textContent = thinkingBuf; scrollBottom();
+    ab.appendThinking(e.data);
   });
   es.addEventListener('assistant', (e) => {
-    clearPending();
-    bodyBuf = e.data; bodyEl.innerHTML = renderMarkdown(bodyBuf); scrollBottom();
+    ab.setAnswer(e.data);
+    ab.collapseThink();
   });
   es.addEventListener('error', (e) => {
-    clearPending();
-    bodyEl.innerHTML += '<div style="color:var(--danger)">错误：' + esc(e.data) + '</div>';
+    ab.clearPending();
+    ab.bodyEl.innerHTML += '<div style="color:var(--danger)">错误：' + esc(e.data) + '</div>';
   });
   es.onerror = () => {
-    clearPending();
-    bodyEl.innerHTML += '<div style="color:var(--danger)">连接中断，请重试</div>';
+    ab.clearPending();
+    ab.bodyEl.innerHTML += '<div style="color:var(--danger)">连接中断，请重试</div>';
     setRunning(false); currentTask = null;
   };
   es.addEventListener('done', () => {
     es.close();
-    thinkingEl.remove();
-    if (!pendingCleared) {
-      bodyEl.innerHTML = '<span style="color:var(--muted)">（没有收到回复）</span>';
-      const p = ab.querySelector('.pending'); if (p) p.remove();
-    }
-    applyCollapse(ab);
+    ab.finalize();        // 兜底空回复 + 收起思考 + 长回答折叠
     currentTask = null; setRunning(false);
     document.getElementById('status').textContent = '';
     loadConversations();
