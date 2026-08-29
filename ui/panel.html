@@ -383,18 +383,21 @@ function applyCollapse(bubble) {
     while (bubble.firstChild) bodyEl.appendChild(bubble.firstChild);
     bubble.appendChild(bodyEl);
   }
-  if (!bodyEl || bodyEl.dataset.collapseReady) return;
+  if (!bodyEl) return;
+  // 已折叠则跳过，避免重复添加“展开全文”按钮（面板显隐切换 / 历史重渲染会多次调用本函数）
+  if (bodyEl.classList.contains('collapsible')) return;
   const lh = lineHeightOf(bodyEl);
   if (bodyEl.scrollHeight <= lh * COLLAPSE_LINES) return;
   bodyEl.classList.add('collapsible', 'collapsed');
   bodyEl.style.maxHeight = (lh * COLLAPSE_LINES) + 'px';
-  bodyEl.dataset.collapseReady = '1';
-  const btn = document.createElement('span');
-  btn.className = 'expand-btn';
-  btn.textContent = '展开全文 ▾';
-  btn.onclick = () => toggleCollapse(bodyEl, btn, bubble);
-  // 放到气泡内（与折叠内容平级，不被 overflow 裁剪）；展开/收起时按钮始终在文本下方
-  bubble.appendChild(btn);
+  if (!bubble.querySelector('.expand-btn')) {
+    const btn = document.createElement('span');
+    btn.className = 'expand-btn';
+    btn.textContent = '展开全文 ▾';
+    btn.onclick = () => toggleCollapse(bodyEl, btn, bubble);
+    // 放到气泡内（与折叠内容平级，不被 overflow 裁剪）；展开/收起时按钮始终在文本下方
+    bubble.appendChild(btn);
+  }
 }
 // 展开/收起时，用按钮前后屏幕位置差修正滚动，把按钮钉在原视觉位置，避免阅读位置跳动
 function toggleCollapse(bodyEl, btn, bubble) {
@@ -484,6 +487,7 @@ function newAssistantBubble() {
       const p = bubble.querySelector('.pending'); if (p) p.remove();
     }
     collapseThink();
+    bubble.dataset.done = '1';   // 标记已完成，允许在面板可见时补折叠
     applyCollapse(bubble);
   }
   return { bubble, bodyEl, clearPending, appendThinking, appendAnswer, setAnswer, collapseThink, finalize };
@@ -564,6 +568,7 @@ function renderMessages(msgs) {
       bodyEl.className = 'body';
       bodyEl.innerHTML = renderMarkdown(turn.text);
       bubble.appendChild(bodyEl);
+      bubble.dataset.done = '1';   // 历史消息视为已完成，允许在面板可见时补折叠
       applyCollapse(bubble);
     } else {
       bubble.innerHTML = renderMarkdown(turn.text);
@@ -766,6 +771,38 @@ ta.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; });
+
+// ---------- 显隐时保持阅读位置 / 补折叠 ----------
+// 面板在小窗 / 全屏 / 收起间切换时，iframe 常驻但可能被 display:none 隐藏：隐藏态下元素
+// 没有布局宽度，scrollHeight 测出 0，会导致①长回答“折叠”误判为短（不折叠、无收起按钮）
+// ②scrollBottom 无法滚动（停留在最顶部）。用 IntersectionObserver 监听面板是否可见，
+// 可见时统一补折叠（长回答默认收起，带“展开全文”按钮）并恢复到正确滚动位置。
+let _wasAtBottom = true;
+let _savedScrollTop = 0;
+function _trackScroll() {
+  const m = document.getElementById('messages'); if (!m) return;
+  _wasAtBottom = (m.scrollTop + m.clientHeight >= m.scrollHeight - 4);
+}
+function _onPanelVisible() {
+  // 仅对已完成的消息补折叠，避免把“进行中”的流式回答误收起
+  document.querySelectorAll('.msg.assistant .bubble[data-done]').forEach(applyCollapse);
+  const m = document.getElementById('messages'); if (!m) return;
+  // 隐藏前停在底部（或首次打开）→ 滚到最新；否则恢复到隐藏前的阅读位置
+  if (_wasAtBottom) m.scrollTop = m.scrollHeight; else m.scrollTop = _savedScrollTop;
+}
+function _onPanelHidden() {
+  const m = document.getElementById('messages'); if (m) _savedScrollTop = m.scrollTop;
+}
+(function setupVisibility() {
+  const m = document.getElementById('messages'); if (m) m.addEventListener('scroll', _trackScroll);
+  if (!('IntersectionObserver' in window)) { _onPanelVisible(); return; }
+  const io = new IntersectionObserver((entries) => {
+    for (const en of entries) {
+      if (en.isIntersecting) _onPanelVisible(); else _onPanelHidden();
+    }
+  }, { threshold: 0 });
+  io.observe(document.body);
+})();
 
 // 跨窗口：若其他窗口已发送/恢复，本窗口不做强制同步（保持各自视图）。
 
