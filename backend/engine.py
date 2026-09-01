@@ -179,6 +179,7 @@ class AIChatManager:
         self._worker = None
         self._procs = {}                      # task_id -> Popen（取消用）
         self._cancel = {}                     # task_id -> True
+        self._timed_out = {}                  # task_id -> True（看门狗超时置位）
         self._subscribers = {}                # task_id -> [queue.Queue, ...]（SSE 订阅者）
         self._buffers = {}                    # task_id -> [event_str, ...]（供重连续接）
         self._tasks = {}                      # task_id -> {owner_id, conversation_id, status, created_at}
@@ -660,6 +661,16 @@ class AIChatManager:
         for blk in buf:
             yield blk
 
+        # 任务已结束（如刷新后回放续传）：缓冲回放完即收尾，避免连接长期挂起
+        with self._lock:
+            _st = self._tasks.get(task_id, {}).get('status')
+        if _st in (self.STATUS_COMPLETED, self.STATUS_FAILED, self.STATUS_CANCELLED):
+            with self._lock:
+                _subs = self._subscribers.get(task_id, [])
+                if sub_q in _subs:
+                    _subs.remove(sub_q)
+            yield _sse_block('done', 'closed')
+            return
         # 流式后续
         while True:
             blk = sub_q.get()
@@ -673,6 +684,17 @@ class AIChatManager:
             subs = list(self._subscribers.get(task_id, []))
         for q in subs:
             q.put(block)
+
+    def _close_subscribers(self, task_id):
+        """任务结束时向所有 SSE 订阅者推送 None 哨兵，使订阅生成器正常退出，
+        避免连接长期挂起 / 重连造成线程与队列泄漏。"""
+        with self._lock:
+            subs = self._subscribers.pop(task_id, [])
+        for q in subs:
+            try:
+                q.put(None)
+            except Exception:
+                pass
 
     # ---------- 取消 ----------
     def cancel(self, task_id):
@@ -754,7 +776,11 @@ class AIChatManager:
             finally:
                 with self._lock:
                     self._procs.pop(task_id, None)
+                    self._timed_out.pop(task_id, None)
+                    self._cancel.pop(task_id, None)
+                    self._stream_flush_at.pop(task_id, None)
                 self._emit(task_id, _sse_block('done', 'closed'))
+                self._close_subscribers(task_id)
 
     def _run_task(self, task_id):
         with self._lock:
@@ -775,11 +801,13 @@ class AIChatManager:
 
         self._emit(task_id, _sse_block('queue', '0'))
 
-        ok, reply, err, rc = self._call_cli(task_id, prompt, model)
-        if not ok:
-            self._emit(task_id, _sse_block('error', err or '调用失败'))
-            with self._lock:
-                self._tasks[task_id]['status'] = self.STATUS_FAILED
+        ok, reply, err, rc, timed_out, result_received = self._call_cli(task_id, prompt, model)
+        # 异常终止判定：CLI 非 0 退出、未收到 result 终态事件（中途崩溃/被杀）、
+        # 超时或被取消——这些都意味着回答不完整，绝不能再静默存成「已完成」。
+        abnormal = (not ok) or timed_out or (rc not in (0, None)) or (not result_received)
+        if abnormal:
+            self._finish_failed(task_id, cid, owner_id, reply, err, timed_out, rc,
+                                 result_received, not ok)
             return
 
         final = (reply or '').strip()
@@ -800,8 +828,45 @@ class AIChatManager:
             self._tasks[task_id]['status'] = self.STATUS_COMPLETED
         self._emit(task_id, _sse_block('assistant', final))
 
+    def _finish_failed(self, task_id, cid, owner_id, partial, err, timed_out, rc,
+                        result_received=False, cli_error=False):
+        """失败/超时/异常终止收尾：保留已生成的部分内容（避免进度全丢），并明确
+        告知用户被截断（含原因），状态置为 cancelled/failed，而非静默 COMPLETED。"""
+        text = (partial or '').strip()
+        with self._lock:
+            now = time.time()
+            meta = self._conv_meta.get(cid)
+            if meta:
+                meta['updated_at'] = now
+                self._update_conv_time(cid, now)
+            if text:
+                self._upsert_assistant_msg(cid, owner_id, text, now, task_id)
+            self._tasks[task_id]['status'] = (
+                self.STATUS_CANCELLED if timed_out else self.STATUS_FAILED)
+        if text:
+            self._emit(task_id, _sse_block('assistant', text))
+        # 构造明确的截断原因，让用户知道这是「中断」而非「正常短回答」
+        if timed_out:
+            reason = ('执行超时（已超过 %d 秒）已自动终止，以上为已生成的部分内容'
+                      % _MAX_TASK_SECONDS)
+        elif rc not in (0, None):
+            reason = '生成中断（CodeBuddy CLI 异常退出，退出码 %s），以上为已生成的部分内容' % rc
+        elif not result_received:
+            reason = '生成中断（未收到完整结果，可能 CLI 已崩溃/被杀），以上为已生成的部分内容'
+        elif err:
+            reason = err
+        else:
+            reason = '已停止'
+        self._emit(task_id, _sse_block('error', reason))
+
     def _call_cli(self, task_id, prompt, model):
-        """调用 CodeBuddy CLI（-p + stream-json），把 text_delta/thinking_delta 流式推送。"""
+        """调用 CodeBuddy CLI（-p + stream-json），把 text_delta/thinking_delta 流式推送。
+
+        关键修复：stderr 用独立线程并发排空。Windows 上子进程 stderr 管道缓冲很小，
+        若 CLI 向 stderr 写入较多内容（进度/诊断，甚至最终回复）而父进程不及时读取，
+        stderr 写满后会阻塞子进程、进而卡死 stdout 读取——表现为「一直思考、不动」，
+        直到看门狗 600s 强杀，留下被截断的回答。并发排空可彻底消除该死锁。
+        """
         buddy = _resolve_buddy_cli()
         if not buddy:
             return False, None, '未找到 CodeBuddy CLI', 1
@@ -842,8 +907,25 @@ class AIChatManager:
 
         with self._lock:
             self._procs[task_id] = proc
+            self._timed_out.pop(task_id, None)
 
-        watchdog = threading.Timer(_MAX_TASK_SECONDS, lambda: (self._cancel.__setitem__(task_id, True), self._terminate(proc)))
+        # 并发排空 stderr：见 _call_cli 文档说明，避免 Windows 下 stderr 管道写满
+        # 导致子进程阻塞、stdout 卡死的死锁。
+        _err_chunks = []
+        def _drain_stderr():
+            try:
+                for _l in proc.stderr:
+                    _err_chunks.append(_l.decode('utf-8', 'replace'))
+            except Exception:
+                pass
+        _stderr_t = threading.Thread(target=_drain_stderr, daemon=True)
+        _stderr_t.start()
+
+        watchdog = threading.Timer(
+            _MAX_TASK_SECONDS,
+            lambda: (self._timed_out.__setitem__(task_id, True),
+                     self._cancel.__setitem__(task_id, True),
+                     self._terminate(proc)))
         watchdog.daemon = True
         watchdog.start()
 
@@ -855,6 +937,7 @@ class AIChatManager:
 
         full = []
         result_text = None
+        result_received = False  # 是否收到 CLI 的 result 终态事件（用于区分「正常完成」与「中途崩溃/被杀」）
         for raw_line in proc.stdout:
             if self._cancel.get(task_id):
                 self._terminate(proc)
@@ -890,6 +973,7 @@ class AIChatManager:
                             delta_text = _d.get('text') or ''
                 elif t == 'result' and isinstance(evt.get('result'), str):
                     result_text = evt.get('result')
+                    result_received = True
             if delta_text:
                 full.append(delta_text)
                 self._emit(task_id, _sse_block('token', delta_text))
@@ -908,11 +992,9 @@ class AIChatManager:
             proc.stdout.close()
         except Exception:
             pass
-        err_text = ''
-        try:
-            err_text = proc.stderr.read().decode('utf-8', errors='replace') or ''
-        except Exception:
-            pass
+        # 等 stderr 排空线程结束（带超时保护，避免卡在 join）
+        _stderr_t.join(timeout=5)
+        err_text = ''.join(_err_chunks) or ''
         try:
             proc.stderr.close()
         except Exception:
@@ -923,12 +1005,13 @@ class AIChatManager:
             pass
         watchdog.cancel()
 
+        timed_out = self._timed_out.pop(task_id, False)
         reply = ''.join(full).strip()
         if not reply and result_text:
             reply = result_text.strip()
         if not reply and err_text and '认证' not in err_text and '未登录' not in err_text:
             reply = err_text.strip()
-        return True, reply, err_text, proc.returncode
+        return True, reply, err_text, proc.returncode, timed_out, result_received
 
 
 # 模块级单例

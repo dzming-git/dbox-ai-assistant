@@ -553,7 +553,7 @@ function newAssistantBubble() {
 
   // 新建片段：type = 'think' | 'answer'
   function newSeg(type) {
-    const seg = { type, buf: '', done: false, userToggled: false };
+    const seg = { type, buf: '', done: false, userToggled: false, finalized: false };
     if (type === 'think') {
       const w = document.createElement('div'); w.className = 'think';
       const hd = document.createElement('div'); hd.className = 'think-hd';
@@ -603,30 +603,46 @@ function newAssistantBubble() {
     return newSeg(type);
   }
 
+  // 节流渲染：每个片段只在下一帧渲染一次（合并同一帧内的多次 token 追加），
+  // 避免每条 token 都全量 innerHTML 重渲染导致的 O(n^2) 主线程卡死（长回答时
+  // 浏览器点击无响应）。finalized 的片段不再被延迟渲染覆盖。
+  function scheduleRender(seg) {
+    if (seg.finalized || seg._renderPending) return;
+    seg._renderPending = true;
+    const s = seg;
+    requestAnimationFrame(function () {
+      s._renderPending = false;
+      if (s.finalized) return;
+      s.bodyEl.innerHTML = renderMarkdown(s.buf);
+      scrollBottom();
+    });
+  }
   function appendThinking(chunk) {
     clearPending();
     const seg = ensureSeg('think');
     seg.buf += chunk;
-    seg.bodyEl.innerHTML = renderMarkdown(seg.buf);
-    scrollBottom();
+    scheduleRender(seg);
   }
   function appendAnswer(chunk) {
     clearPending();
     const seg = ensureSeg('answer');
     seg.buf += chunk;
-    seg.bodyEl.innerHTML = renderMarkdown(seg.buf);
-    scrollBottom();
+    scheduleRender(seg);
   }
   function setAnswer(full) {
     clearPending();
     const seg = ensureSeg('answer');
     seg.buf = full;
+    seg.finalized = true;
+    seg._renderPending = false;
     seg.bodyEl.innerHTML = renderMarkdown(full);
     scrollBottom();
   }
   // 完成时收尾：兜底空回复、思考段保留（默认收起可回看）、长回答折叠
   function finalize() {
     clearPending();
+    // 锁定所有片段，避免遗留的节流渲染帧覆盖已收尾的折叠态
+    state.segs.forEach(function (s) { s.finalized = true; });
     closePrevThink();     // 思考段不会被删除，只是默认收起
     const hasAnswer = state.segs.some(s => s.type === 'answer' && s.buf.trim());
     if (!hasAnswer) {
