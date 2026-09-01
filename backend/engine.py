@@ -525,6 +525,10 @@ class AIChatManager:
         return out
 
     def create_conversation(self, owner_id, title=None):
+        # owner_id 必须统一转 str：chat() 入队时会把 owner_id str() 后再与
+        # _conv_meta 里的值比较。此处若原样存 int（如 JWT 的 1），新建出来的会话
+        # 在首次发消息时就会因 1 != '1' 被判成「会话不存在」。
+        owner_id = None if owner_id is None else str(owner_id)
         with self._lock:
             cid = uuid.uuid4().hex
             now = time.time()
@@ -607,7 +611,10 @@ class AIChatManager:
             # 解析目标会话：显式指定则校验归属；否则取最近会话，无则建默认
             if conversation_id:
                 meta = self._conv_meta.get(conversation_id)
-                if not meta or meta.get('owner_id') != owner_id:
+                # 两侧都转 str 再比，与 delete/rename/clear 保持一致：
+                # 历史库存的是 str 而 JWT 的 user_id 是 int，严格 == 会因类型
+                # 不一致把会话判成不存在（表现为「新建对话后聊天报错」）。
+                if not meta or str(meta.get('owner_id')) != str(owner_id):
                     return None, '会话不存在'
                 cid = conversation_id
             else:
