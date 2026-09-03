@@ -262,7 +262,7 @@ let currentConvId = null;    // 当前会话 id（持久化到 localStorage）
 //   __EXT_API_PREFIX__ -> 后端 API 前缀（/api/ext/<key>/，含结尾斜杠）
 // 由此面板不再写死插件 id，可复用于任意拓展。
 const EXT_KEY = '__EXT_KEY__';
-const API_PREFIX = '__EXT_API_PREFIX__';
+const API = '__EXT_API_PREFIX__'.replace(/\/$/, '');
 const CONV_KEY = 'codebuddy_conv_' + EXT_KEY;
 
 // 宿主（ExtensionHost / ExtensionStandalone）通过 postMessage 下发 token
@@ -669,7 +669,7 @@ function loadCurrentConv() {
 }
 async function loadConversations() {
   try {
-    const r = await api(API_PREFIX + 'conversations'); const j = await r.json();
+    const r = await api(API + '/conversations'); const j = await r.json();
     const list = j.conversations || [];
     const sel = document.getElementById('convList');
     const prev = currentConvId;
@@ -707,7 +707,7 @@ async function selectConversation(cid) {
 async function loadMessages(cid) {
   if (!cid) { renderMessages([]); return; }
   try {
-    const r = await api(API_PREFIX + 'conversations/' + encodeURIComponent(cid) + '/messages');
+    const r = await api(API + '/conversations/' + encodeURIComponent(cid) + '/messages');
     const j = await r.json();
     renderMessages(j.messages || []);
     tryResumeForConv(cid);   // 该会话若有生成中的任务则恢复订阅，避免内容被跳过又收不到
@@ -744,7 +744,7 @@ function renderMessages(msgs) {
 }
 async function newConversation() {
   try {
-    const r = await api(API_PREFIX + 'conversations', { method: 'POST', body: JSON.stringify({}) });
+    const r = await api(API + '/conversations', { method: 'POST', body: JSON.stringify({}) });
     const j = await r.json();
     if (!j.success) { setStatus('新建会话失败：' + (j.message || ''), true); return; }
     await loadConversations();
@@ -759,7 +759,7 @@ async function deleteConversation() {
   if (!currentConvId) { setStatus('没有可删除的会话', true); return; }
   if (!(await showConfirm('删除当前会话及其全部消息？'))) return;
   try {
-    const r = await api(API_PREFIX + 'conversations/' + encodeURIComponent(currentConvId), { method: 'DELETE' });
+    const r = await api(API + '/conversations/' + encodeURIComponent(currentConvId), { method: 'DELETE' });
     const j = await r.json();
     if (!j.success) { setStatus('删除失败：' + (j.message || ''), true); return; }
     currentConvId = null; saveCurrentConv();
@@ -780,7 +780,7 @@ async function send() {
   const ab = newAssistantBubble();
 
   try {
-    const r = await api(API_PREFIX + 'chat', { method: 'POST',
+    const r = await api(API + '/chat', { method: 'POST',
       body: JSON.stringify({ message: text, model: document.getElementById('model').value,
         conversation_id: currentConvId || '' }) });
     const j = await r.json();
@@ -801,7 +801,7 @@ async function send() {
 
   // SSE：EventSource 无法携带 Authorization header，故把 token 放进 query 参数
   // （浏览器侧唯一可行的带凭证方式；后端 /stream 已支持 ?token=）。
-  const es = new EventSource(API_PREFIX + 'stream?task_id=' + encodeURIComponent(currentTask)
+  const es = new EventSource(API + '/stream?task_id=' + encodeURIComponent(currentTask)
     + '&token=' + encodeURIComponent(getAuthToken()));
   es.addEventListener('token', (e) => {
     ab.appendAnswer(e.data);
@@ -837,7 +837,7 @@ async function send() {
 // 仍在生成的任务并重新订阅：后端会回放已生成的全部内容，再续传剩余部分。
 async function fetchRunningTasks() {
   try {
-    const r = await api(API_PREFIX + 'tasks');
+    const r = await api(API + '/tasks');
     const j = await r.json();
     const running = j.running || [];
     runningTaskIds = new Set(running.map(t => t.id));
@@ -856,7 +856,7 @@ function resumeRunningTask(taskId) {
   currentTask = taskId;
   const ab = newAssistantBubble();
   setRunning(true);
-  const es = new EventSource(API_PREFIX + 'stream?task_id=' + encodeURIComponent(taskId)
+  const es = new EventSource(API + '/stream?task_id=' + encodeURIComponent(taskId)
     + '&token=' + encodeURIComponent(getAuthToken()));
   es.addEventListener('token', (e) => {
     ab.appendAnswer(e.data);
@@ -902,13 +902,13 @@ function setRunning(run) {
 }
 async function cancel() {
   if (!currentTask) return;
-  await api(API_PREFIX + 'cancel', { method: 'POST', body: JSON.stringify({ task_id: currentTask }) });
+  await api(API + '/cancel', { method: 'POST', body: JSON.stringify({ task_id: currentTask }) });
 }
 
 // ---------- 历史 / 模型 ----------
 async function loadModels() {
   try {
-    const r = await api(API_PREFIX + 'models'); const j = await r.json();
+    const r = await api(API + '/models'); const j = await r.json();
     const sel = document.getElementById('model');
     (j.models || []).forEach(m => {
       const o = document.createElement('option'); o.value = m.id; o.textContent = m.name; sel.appendChild(o);
@@ -924,7 +924,7 @@ async function loadModels() {
 document.getElementById('sendBtn').onclick = send;
 document.getElementById('cancelBtn').onclick = cancel;
 document.getElementById('clearBtn').onclick = async () => {
-  await api(API_PREFIX + 'clear', { method: 'POST', body: JSON.stringify({ conversation_id: currentConvId || '' }) });
+  await api(API + '/clear', { method: 'POST', body: JSON.stringify({ conversation_id: currentConvId || '' }) });
   renderMessages([]);
 };
 document.getElementById('newConvBtn').onclick = newConversation;
