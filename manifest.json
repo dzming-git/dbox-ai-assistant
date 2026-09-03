@@ -85,7 +85,6 @@
   "backend": {
     "module": "backend.server",
     "factory": "create_blueprint",
-    "url_prefix": "/api/ext/codebuddy",
     "needs": ["codebuddy_token"],
     "main_service_url": "http://127.0.0.1:8080"
   }
